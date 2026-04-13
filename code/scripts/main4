@@ -1,0 +1,144 @@
+import os
+import pandas as pd
+import numpy as np
+
+def extract_thickness(val, expected_index, default_val):
+    """
+    智能提取厚度数据的辅助函数。
+    支持处理由 '|' 分割的字符串（如 Substrate），提取指定索引的值，并处理缺失值。
+    如果是单一数据（如 ETL），expected_index 传入 0 即可直接提取。
+    """
+    if pd.isna(val):
+        return default_val
+    
+    val_str = str(val).strip()
+    if val_str == '' or val_str.lower() == 'nan':
+        return default_val
+    
+    # 按照 '|' 分割数据
+    parts = [p.strip() for p in val_str.split('|')]
+    
+    # 尝试获取目标索引的数据
+    if len(parts) > expected_index:
+        target_str = parts[expected_index]
+    else:
+        target_str = parts[-1]
+        
+    if target_str.lower() == 'nan' or target_str == '':
+        return default_val
+        
+    try:
+        return float(target_str)
+    except ValueError:
+        return default_val
+
+def get_valid_number(val, default_val):
+    """
+    提取普通数值，若为空或非数字，则返回默认值。
+    """
+    if pd.isna(val):
+        return default_val
+    val_str = str(val).strip()
+    if val_str == '' or val_str.lower() == 'nan':
+        return default_val
+    try:
+        return float(val_str)
+    except ValueError:
+        return default_val
+
+def process_and_merge_data():
+    # ==========================================
+    # 1. 动态获取路径
+    # ==========================================
+    current_script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(current_script_dir)
+    
+    bin_dir = os.path.join(project_root, 'bin')
+    analyses_dir = os.path.join(bin_dir, 'analyses1')
+    data_dir = os.path.join(project_root, 'data')
+    
+    sim_input_file = os.path.join(analyses_dir, 'simulation_results_TiO2-c.csv')
+    db_input_file = os.path.join(data_dir, 'Perovskite_database_content_all_data.csv')
+    output_file = os.path.join(analyses_dir, 'analyses_x.csv')
+
+    print(f"正在读取模拟结果: {sim_input_file}")
+    print(f"正在读取原始数据库: {db_input_file}")
+
+    try:
+        # ==========================================
+        # 2. 读取数据
+        # ==========================================
+        df_sim = pd.read_csv(sim_input_file)
+        df_db = pd.read_csv(db_input_file, low_memory=False)
+        
+        # 将原始数据库与模拟结果基于 Ref_ID 进行左连接合并
+        df_merged = pd.merge(df_sim, df_db, on='Ref_ID', how='left')
+
+        # ==========================================
+        # 3. 构建新的纯净版分析表格
+        # ==========================================
+        print("正在进行数据转换和结构重组...")
+        new_data = []
+        
+        for index, row in df_merged.iterrows():
+            
+            # --- 核心提取逻辑 ---
+            # 电池面积，若为空则默认 0.06
+            cell_area = get_valid_number(row.get('Cell_area_measured', np.nan), 0.06)
+
+            # Substrate 取第2个(index=1), 默认 50
+            sub_thick = extract_thickness(row.get('Substrate_thickness', np.nan), 1, 50)
+            
+            # ETL 直接取 ETL_thickness，不分割 (index=0)，默认 200
+            etl_thick = extract_thickness(row.get('ETL_thickness', np.nan), 0, 200)
+            
+            # Perovskite 取厚度，默认 400
+            pero_thick = extract_thickness(row.get('Perovskite_thickness', np.nan), 0, 400)
+            
+            # HTL 取厚度，默认 200
+            htl_val = row.get('HTL_thickness_list', row.get('HTL_thickness', np.nan))
+            htl_thick = extract_thickness(htl_val, 0, 200)
+            
+            # Backcontact 取厚度，默认 100
+            bc_val = row.get('Backcontact_thickness_list', row.get('Backcontact_thickness', np.nan))
+            bc_thick = extract_thickness(bc_val, 0, 100)
+
+            # 严格按照要求的顺序组装数据
+            new_row = {
+                'Ref_ID': row['Ref_ID'],
+                'Cell_area': cell_area,
+                'Layer_1': 'Substrate',
+                'Layer_1_material': 'FTO',
+                'Substrate_thickness': sub_thick,
+                'Layer_2': 'ETL',
+                'Layer_2_material': 'TiO2-c',
+                'ETL_thickness': etl_thick,
+                'Layer_3': 'Perovskite',
+                'Layer_3_material': 'MAPbI3',
+                'Perovskite_thickness': pero_thick,
+                'Layer_4': 'HTL',
+                'Layer_4_material': 'Spiro-MeOTAD',
+                'HTL_thickness': htl_thick,
+                'Layer_5': 'Backcontact',
+                'Layer_5_material': 'Au',
+                'Backcontact_thickness': bc_thick
+            }
+            
+            new_data.append(new_row)
+
+        # 转换为 DataFrame
+        df_final = pd.DataFrame(new_data)
+        
+        # ==========================================
+        # 4. 保存结果
+        # ==========================================
+        df_final.to_csv(output_file, index=False, encoding='utf-8-sig')
+        print(f"✅ 处理完成！纯净版数据表已成功生成并保存至: {output_file}")
+        
+    except FileNotFoundError as e:
+        print(f"❌ 找不到文件，请检查您的 data 或 bin 文件夹中是否存在所需文件。\n详细报错: {e}")
+    except Exception as e:
+        print(f"❌ 程序运行时发生错误: {e}")
+
+if __name__ == "__main__":
+    process_and_merge_data()

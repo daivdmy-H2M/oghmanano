@@ -1,0 +1,103 @@
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+
+def generate_scatter_plots():
+    # ==========================================
+    # 1. 动态获取路径
+    # ==========================================
+    current_script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(current_script_dir)
+    analyses_dir = os.path.join(project_root, 'bin', 'analyses1')
+    
+    file_y = os.path.join(analyses_dir, 'analyses_y.csv')
+    file_y_hat = os.path.join(analyses_dir, 'analyses_y_hat.csv')
+
+    print(f"正在读取数据以生成散点图...")
+
+    try:
+        # ==========================================
+        # 2. 读取数据
+        # ==========================================
+        df_y = pd.read_csv(file_y)
+        df_y_hat = pd.read_csv(file_y_hat)
+        
+        # 【核心修复部分】
+        # 为了避免两个表格都有 'JV_default_Voc' 导致合并后列名变成 _x 和 _y
+        # 我们在合并前，先将 df_y 中的重复列临时剔除，这样合并后的表格列名就纯净了
+        df_merged = pd.merge(df_y.drop(columns=['JV_default_Voc']), df_y_hat, on='Ref_ID', how='inner')
+
+        # 设置全局绘图参数
+        plt.rcParams['text.color'] = 'black'
+        plt.rcParams['axes.labelcolor'] = 'black'
+        plt.rcParams['xtick.color'] = 'black'
+        plt.rcParams['ytick.color'] = 'black'
+        plt.rcParams['axes.edgecolor'] = 'black'
+        plt.rcParams['figure.facecolor'] = 'white'
+        plt.rcParams['axes.facecolor'] = 'white'
+
+        # ==========================================
+        # 3. 绘制第一张图：scatter_plot_y
+        # ==========================================
+        plt.figure(figsize=(8, 6))
+        plt.scatter(df_y['Simulation_Voc'], df_y['Simulation_Jsc'], 
+                    color='#3491FA', label='Simulation (y)')
+        plt.xlabel('Voc')
+        plt.ylabel('Jsc')
+        plt.title('y')
+        
+        out_y = os.path.join(analyses_dir, 'scatter_plot_y.png')
+        plt.savefig(out_y, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"✅ 图 1 已生成: {out_y}")
+
+        # ==========================================
+        # 4. 绘制第二张图：scatter_plot_y_hat
+        # ==========================================
+        plt.figure(figsize=(8, 6))
+        plt.scatter(df_y_hat['JV_default_Voc'], df_y_hat['JV_default_Jsc'], 
+                    color='#FFA500', label='Default (y_hat)')
+        plt.xlabel('Voc')
+        plt.ylabel('Jsc')
+        plt.title('y_hat') 
+        
+        out_y_hat = os.path.join(analyses_dir, 'scatter_plot_y_hat.png')
+        plt.savefig(out_y_hat, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"✅ 图 2 已生成: {out_y_hat}")
+
+        # ==========================================
+        # 5. 绘制第三张图：scatter_plot_y-y_hat (整合与连线)
+        # ==========================================
+        plt.figure(figsize=(8, 6))
+        
+        # 画出 y 的点（透明度 50%）
+        plt.scatter(df_merged['Simulation_Voc'], df_merged['Simulation_Jsc'], 
+                    color='#3491FA', alpha=0.5, label='Simulation (y)', zorder=2)
+        
+        # 画出 y_hat 的点（透明度 50%）
+        plt.scatter(df_merged['JV_default_Voc'], df_merged['JV_default_Jsc'], 
+                    color='#FFA500', alpha=0.5, label='Default (y_hat)', zorder=2)
+        
+        # 遍历合并后的数据连线
+        for index, row in df_merged.iterrows():
+            plt.plot([row['Simulation_Voc'], row['JV_default_Voc']], 
+                     [row['Simulation_Jsc'], row['JV_default_Jsc']], 
+                     color='black', linewidth=0.5, alpha=0.6, zorder=1)
+
+        plt.xlabel('Voc')
+        plt.ylabel('Jsc')
+        plt.title('y-y_hat')
+        
+        out_combined = os.path.join(analyses_dir, 'scatter_plot_y-y_hat.png')
+        plt.savefig(out_combined, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"✅ 图 3 已成功生成: {out_combined}")
+        
+        print("🎉 所有散点图均已成功绘制并保存！")
+
+    except Exception as e:
+        print(f"❌ 程序运行时发生未知错误: {e}")
+
+if __name__ == "__main__":
+    generate_scatter_plots()

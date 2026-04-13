@@ -1,0 +1,82 @@
+import os
+import pandas as pd
+
+def split_simulation_data():
+    # ==========================================
+    # 1. 动态获取路径
+    # ==========================================
+    # 获取当前代码文件所在的目录 (例如 .../scripts)
+    current_script_dir = os.path.dirname(os.path.abspath(__file__))
+    # 获取项目根目录
+    project_root = os.path.dirname(current_script_dir)
+    
+    # 所有的文件都在 analyses1 文件夹中
+    analyses_dir = os.path.join(project_root, 'bin', 'analyses1')
+    
+    # 定义输入和输出文件路径
+    input_file = os.path.join(analyses_dir, 'simulation_results_TiO2-c.csv')
+    output_y_file = os.path.join(analyses_dir, 'analyses_y.csv')
+    output_y_hat_file = os.path.join(analyses_dir, 'analyses_y_hat.csv')
+
+    print(f"正在读取文件: {input_file}")
+
+    try:
+        # ==========================================
+        # 2. 读取原始数据
+        # ==========================================
+        df = pd.read_csv(input_file)
+        
+        # ==========================================
+        # 3. 数据预处理
+        # ==========================================
+        # 要求：Simulation_Jsc 取正数（绝对值）之后除以 10
+        if 'Simulation_Jsc' in df.columns:
+            df['Simulation_Jsc'] = df['Simulation_Jsc'].abs() / 10
+            
+        # ==========================================
+        # 4. 拆分数据为 analyses_y 和 analyses_y_hat
+        # ==========================================
+        # 定义 y 需要的列
+        cols_y = [
+            'Ref_ID', 
+            'Simulation_Voc', 
+            'Simulation_Jsc', 
+            'JV_default_Voc', 
+            'Simulation_PCE', 
+            'Simulation_FF'
+        ]
+        
+        # 定义 y_hat 需要的列
+        cols_y_hat = [
+            'Ref_ID', 
+            'JV_default_Voc', 
+            'JV_default_Jsc', 
+            'JV_default_PCE', 
+            'JV_default_FF'
+        ]
+        
+        # 提取对应的 DataFrame（如果某列不存在会抛出 KeyError，正好由 except 捕获提示）
+        df_y = df[cols_y]
+        df_y_hat = df[cols_y_hat]
+        
+        # ==========================================
+        # 5. 保存结果
+        # ==========================================
+        # 保存为 CSV 文件，去掉行索引
+        df_y.to_csv(output_y_file, index=False, encoding='utf-8-sig')
+        df_y_hat.to_csv(output_y_hat_file, index=False, encoding='utf-8-sig')
+        
+        print(f"✅ 处理完成！")
+        print(f"  - analyses_y 已保存至: {output_y_file}")
+        print(f"  - analyses_y_hat 已保存至: {output_y_hat_file}")
+        
+    except FileNotFoundError:
+        print(f"❌ 错误：找不到文件 {input_file}。请确保上一步已成功生成该文件。")
+    except KeyError as e:
+        print(f"❌ 错误：在源文件中找不到指定的列 {e}。请检查表头是否完全一致。")
+    except Exception as e:
+        print(f"❌ 程序运行时发生未知错误: {e}")
+
+if __name__ == "__main__":
+    split_simulation_data()
+    
