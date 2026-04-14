@@ -81,3 +81,66 @@ JV_default_Voc和JV_default_Jsc所对应的点用橙色的点标出，色值为#
 命名为"scatter_plot_y-y_hat"
 文字和坐标轴用黑色，底色为白色。
 
+
+## train 脚本本地运行（Windows）
+
+如果你在 PowerShell 里执行：
+
+`.\.venv\Scripts\Activate.ps1`
+
+出现 `PSSecurityException / 因为在此系统上禁止运行脚本`，这是 **PowerShell 执行策略** 导致，和训练代码本身无关。可以用下面任意一种方式：
+
+### 方式 1（推荐，当前终端临时放开）
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+python .\scripts\train
+```
+
+> 只对当前 PowerShell 窗口生效，关闭后恢复默认策略。
+
+### 方式 2（不激活 venv，直接调用 venv 的 python）
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r .\requirements-train.txt
+.\.venv\Scripts\python.exe .\scripts\train
+```
+
+### 方式 3（用 CMD 激活，不走 PowerShell 策略）
+
+```bat
+.\.venv\Scripts\activate.bat
+python .\scripts\train
+```
+
+## test 集验证脚本（x -> 预测 delta_y，与真实 delta_y 对比）
+
+当 `bin/train/delta_y_model.pkl` 已生成后，可运行：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\validate
+```
+
+脚本会自动读取：
+- `bin/test/test_x.csv`
+- `bin/test/test_y.csv`
+- `bin/test/test_y_hat.csv`
+
+并输出：
+- `bin/test/test_delta_y_predictions.csv`（每条样本的 true/pred/error）
+- `bin/test/test_delta_y_metrics.csv`（MAE/MSE/RMSE/R2 汇总）
+
+## 自动画图脚本（真实 vs 预测散点图 + 误差分布图）
+
+当 `bin/test/test_delta_y_predictions.csv` 已生成后，可运行：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\plot_validate
+```
+
+脚本会按目标自动识别并生成图像到：
+- `bin/test/figures/delta_Voc_analysis.png`
+- `bin/test/figures/delta_Jsc_analysis.png`
+- `bin/test/figures/delta_PCE_analysis.png`
+- `bin/test/figures/delta_FF_analysis.png`
