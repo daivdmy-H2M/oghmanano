@@ -1,0 +1,136 @@
+import os
+import pandas as pd
+import numpy as np
+import joblib
+from pathlib import Path
+
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.multioutput import MultiOutputRegressor
+from sklearn.metrics import mean_squared_error, r2_score
+
+# ==========================================
+# 1. 路径配置 (Path Configuration)
+# ==========================================
+# 获取当前脚本所在目录 (scripts/train)
+SCRIPT_DIR = Path(__file__).parent.resolve()
+
+# 定义数据所在目录 (这里使用您提供的绝对路径，您也可以使用基于 SCRIPT_DIR 的相对路径)
+DATA_DIR = Path(r"C:\Users\刘惠雅\Documents\GitHub\oghmanano\code\bin\train")
+
+# 如果未来要用相对路径，可以取消下面这行的注释:
+# DATA_DIR = SCRIPT_DIR.parent.parent / "bin" / "train"
+
+def load_and_align_data(prefix):
+    """
+    加载数据并对齐 Ref_ID
+    prefix: 'train' 或 'test'
+    """
+    x_path = DATA_DIR / f"{prefix}_x.csv"
+    y_path = DATA_DIR / f"{prefix}_y.csv"
+    y_hat_path = DATA_DIR / f"{prefix}_y_hat.csv"
+    
+    # 检查文件是否存在
+    for path in [x_path, y_path, y_hat_path]:
+        if not path.exists():
+            raise FileNotFoundError(f"找不到数据文件: {path}。请检查路径配置或数据是否已生成。")
+    
+    df_x = pd.read_csv(x_path).sort_values('Ref_ID').reset_index(drop=True)
+    df_y = pd.read_csv(y_path).sort_values('Ref_ID').reset_index(drop=True)
+    df_y_hat = pd.read_csv(y_hat_path).sort_values('Ref_ID').reset_index(drop=True)
+    
+    # 验证对齐情况
+    if not (df_x['Ref_ID'].equals(df_y['Ref_ID']) and df_y['Ref_ID'].equals(df_y_hat['Ref_ID'])):
+        raise ValueError(f"{prefix} 组数据的 Ref_ID 无法完美对齐，请检查数据源！")
+        
+    return df_x, df_y, df_y_hat
+
+def prepare_features_and_targets(df_x, df_y, df_y_hat):
+    """
+    准备特征矩阵 X 和目标矩阵 Y (Delta_y)
+    """
+    target_metrics = [
+        ('Simulation_Voc', 'JV_default_Voc', 'delta_Voc'),
+        ('Simulation_Jsc', 'JV_default_Jsc', 'delta_Jsc'),
+        ('Simulation_PCE', 'JV_default_PCE', 'delta_PCE'),
+        ('Simulation_FF',  'JV_default_FF',  'delta_FF')
+    ]
+    
+    # 1. 计算 Delta Y (模拟值 - 真实值)
+    Y = pd.DataFrame()
+    for y_col, y_hat_col, delta_col in target_metrics:
+        # 如果列名存在细微差异，可用 if y_col in df_y.columns 做保护
+        Y[delta_col] = df_y[y_col] - df_y_hat[y_hat_col]
+        
+    # 2. 准备 X (剔除不可学习的 ID)
+    X = df_x.drop(columns=['Ref_ID'])
+    
+    return X, Y
+
+def build_model_pipeline(X_sample):
+    """
+    构建数据预处理和机器学习模型 Pipeline
+    """
+    # 自动识别连续特征和类别特征
+    categorical_cols = X_sample.select_dtypes(include=['object', 'category']).columns.tolist()
+    numeric_cols = X_sample.select_dtypes(include=['int64', 'float64']).columns.tolist()
+    
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ('num', StandardScaler(), numeric_cols),
+            ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_cols)
+        ])
+    
+    # 随机森林多目标回归器
+    rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+    
+    pipeline = Pipeline(steps=[
+        ('preprocessor', preprocessor),
+        ('regressor', MultiOutputRegressor(rf))
+    ])
+    
+    return pipeline
+
+def main():
+    print(f"数据读取目录设定为: {DATA_DIR}")
+    
+    # 1. 加载数据
+    print("正在加载并对齐数据...")
+    train_x, train_y, train_y_hat = load_and_align_data('train')
+    test_x, test_y, test_y_hat = load_and_align_data('test')
+    
+    # 2. 构建特征和目标变量
+    X_train, Y_train = prepare_features_and_targets(train_x, train_y, train_y_hat)
+    X_test, Y_test = prepare_features_and_targets(test_x, test_y, test_y_hat)
+    
+    # 3. 构建模型 Pipeline
+    model = build_model_pipeline(X_train)
+    
+    # 4. 训练模型
+    print(f"开始训练模型，训练样本数: {len(X_train)} ...")
+    model.fit(X_train, Y_train)
+    print("模型训练完成！")
+    
+    # 5. 保存模型到 bin/train 目录
+    model_save_path = DATA_DIR / 'rf_delta_y_model.pkl'
+    joblib.dump(model, model_save_path)
+    print(f"✅ 模型已成功保存至: {model_save_path}")
+    
+    # 6. 模型验证评估
+    print("\n" + "="*30)
+    print("--- 验证集评估结果 ---")
+    Y_pred = model.predict(X_test)
+    Y_pred_df = pd.DataFrame(Y_pred, columns=Y_test.columns)
+    
+    for col in Y_test.columns:
+        mse = mean_squared_error(Y_test[col], Y_pred_df[col])
+        r2 = r2_score(Y_test[col], Y_pred_df[col])
+        print(f"👉 目标变量: {col}")
+        print(f"   MSE: {mse:.4f}")
+        print(f"   R² Score: {r2:.4f}\n")
+    print("="*30)
+
+if __name__ == "__main__":
+    main()
