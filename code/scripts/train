@@ -4,6 +4,7 @@ import joblib
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.impute import SimpleImputer
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 from sklearn.multioutput import MultiOutputRegressor
@@ -56,20 +57,56 @@ def build_xy(df_x, df_y, df_y_hat):
             raise KeyError(f"train_y.csv 缺少列: {y_col}")
         if y_hat_col not in df_y_hat.columns:
             raise KeyError(f"train_y_hat.csv 缺少列: {y_hat_col}")
-        delta_y[delta_col] = df_y[y_col] - df_y_hat[y_hat_col]
+        y_numeric = pd.to_numeric(df_y[y_col], errors="coerce")
+        y_hat_numeric = pd.to_numeric(df_y_hat[y_hat_col], errors="coerce")
+        delta_y[delta_col] = y_numeric - y_hat_numeric
+
+    # 训练目标不允许 NaN：过滤掉任意 delta 列缺失的样本
+    valid_mask = ~delta_y.isna().any(axis=1)
+    dropped_rows = int((~valid_mask).sum())
+    if dropped_rows > 0:
+        print(f"检测到 {dropped_rows} 行目标值缺失，已从训练集中移除。")
+
+    x = x.loc[valid_mask].reset_index(drop=True)
+    delta_y = delta_y.loc[valid_mask].reset_index(drop=True)
+
+    if len(delta_y) < 20:
+        raise ValueError(
+            "可用于训练的有效样本过少（<20），请检查 train_y/train_y_hat 的缺失值。"
+        )
 
     return x, delta_y
 
 
 def build_model(x_sample):
     """构建预处理+多输出回归模型。"""
-    categorical_cols = x_sample.select_dtypes(include=["object", "category"]).columns
+    categorical_cols = x_sample.select_dtypes(
+        include=["object", "category", "string"]
+    ).columns
     numeric_cols = x_sample.select_dtypes(include=["number"]).columns
 
     preprocessor = ColumnTransformer(
         transformers=[
-            ("num", StandardScaler(), list(numeric_cols)),
-            ("cat", OneHotEncoder(handle_unknown="ignore"), list(categorical_cols)),
+            (
+                "num",
+                Pipeline(
+                    steps=[
+                        ("imputer", SimpleImputer(strategy="median")),
+                        ("scaler", StandardScaler()),
+                    ]
+                ),
+                list(numeric_cols),
+            ),
+            (
+                "cat",
+                Pipeline(
+                    steps=[
+                        ("imputer", SimpleImputer(strategy="most_frequent")),
+                        ("encoder", OneHotEncoder(handle_unknown="ignore")),
+                    ]
+                ),
+                list(categorical_cols),
+            ),
         ]
     )
 
