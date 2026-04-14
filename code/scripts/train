@@ -1,136 +1,118 @@
-import os
-import pandas as pd
-import numpy as np
-import joblib
 from pathlib import Path
 
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+import joblib
+import pandas as pd
 from sklearn.compose import ColumnTransformer
-from sklearn.pipeline import Pipeline
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.multioutput import MultiOutputRegressor
 from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.model_selection import train_test_split
+from sklearn.multioutput import MultiOutputRegressor
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-# ==========================================
-# 1. 路径配置 (Path Configuration)
-# ==========================================
-# 获取当前脚本所在目录 (scripts/train)
-SCRIPT_DIR = Path(__file__).parent.resolve()
+# 当前文件: code/scripts/train
+SCRIPT_PATH = Path(__file__).resolve()
+PROJECT_ROOT = SCRIPT_PATH.parent.parent
+DATA_DIR = PROJECT_ROOT / "bin" / "train"
 
-# 定义数据所在目录 (这里使用您提供的绝对路径，您也可以使用基于 SCRIPT_DIR 的相对路径)
-DATA_DIR = Path(r"C:\Users\刘惠雅\Documents\GitHub\oghmanano\code\bin\train")
+TARGET_MAP = [
+    ("Simulation_Voc", "JV_default_Voc", "delta_Voc"),
+    ("Simulation_Jsc", "JV_default_Jsc", "delta_Jsc"),
+    ("Simulation_PCE", "JV_default_PCE", "delta_PCE"),
+    ("Simulation_FF", "JV_default_FF", "delta_FF"),
+]
 
-# 如果未来要用相对路径，可以取消下面这行的注释:
-# DATA_DIR = SCRIPT_DIR.parent.parent / "bin" / "train"
 
-def load_and_align_data(prefix):
-    """
-    加载数据并对齐 Ref_ID
-    prefix: 'train' 或 'test'
-    """
-    x_path = DATA_DIR / f"{prefix}_x.csv"
-    y_path = DATA_DIR / f"{prefix}_y.csv"
-    y_hat_path = DATA_DIR / f"{prefix}_y_hat.csv"
-    
-    # 检查文件是否存在
-    for path in [x_path, y_path, y_hat_path]:
-        if not path.exists():
-            raise FileNotFoundError(f"找不到数据文件: {path}。请检查路径配置或数据是否已生成。")
-    
-    df_x = pd.read_csv(x_path).sort_values('Ref_ID').reset_index(drop=True)
-    df_y = pd.read_csv(y_path).sort_values('Ref_ID').reset_index(drop=True)
-    df_y_hat = pd.read_csv(y_hat_path).sort_values('Ref_ID').reset_index(drop=True)
-    
-    # 验证对齐情况
-    if not (df_x['Ref_ID'].equals(df_y['Ref_ID']) and df_y['Ref_ID'].equals(df_y_hat['Ref_ID'])):
-        raise ValueError(f"{prefix} 组数据的 Ref_ID 无法完美对齐，请检查数据源！")
-        
+def load_train_dataset():
+    """只使用 bin/train 中的训练集文件，按 Ref_ID 对齐。"""
+    x_path = DATA_DIR / "train_x.csv"
+    y_path = DATA_DIR / "train_y.csv"
+    y_hat_path = DATA_DIR / "train_y_hat.csv"
+
+    for file_path in (x_path, y_path, y_hat_path):
+        if not file_path.exists():
+            raise FileNotFoundError(f"缺少训练文件: {file_path}")
+
+    df_x = pd.read_csv(x_path).sort_values("Ref_ID").reset_index(drop=True)
+    df_y = pd.read_csv(y_path).sort_values("Ref_ID").reset_index(drop=True)
+    df_y_hat = pd.read_csv(y_hat_path).sort_values("Ref_ID").reset_index(drop=True)
+
+    if not (
+        df_x["Ref_ID"].equals(df_y["Ref_ID"])
+        and df_y["Ref_ID"].equals(df_y_hat["Ref_ID"])
+    ):
+        raise ValueError("train_x/train_y/train_y_hat 的 Ref_ID 未完全对齐。")
+
     return df_x, df_y, df_y_hat
 
-def prepare_features_and_targets(df_x, df_y, df_y_hat):
-    """
-    准备特征矩阵 X 和目标矩阵 Y (Delta_y)
-    """
-    target_metrics = [
-        ('Simulation_Voc', 'JV_default_Voc', 'delta_Voc'),
-        ('Simulation_Jsc', 'JV_default_Jsc', 'delta_Jsc'),
-        ('Simulation_PCE', 'JV_default_PCE', 'delta_PCE'),
-        ('Simulation_FF',  'JV_default_FF',  'delta_FF')
-    ]
-    
-    # 1. 计算 Delta Y (模拟值 - 真实值)
-    Y = pd.DataFrame()
-    for y_col, y_hat_col, delta_col in target_metrics:
-        # 如果列名存在细微差异，可用 if y_col in df_y.columns 做保护
-        Y[delta_col] = df_y[y_col] - df_y_hat[y_hat_col]
-        
-    # 2. 准备 X (剔除不可学习的 ID)
-    X = df_x.drop(columns=['Ref_ID'])
-    
-    return X, Y
 
-def build_model_pipeline(X_sample):
-    """
-    构建数据预处理和机器学习模型 Pipeline
-    """
-    # 自动识别连续特征和类别特征
-    categorical_cols = X_sample.select_dtypes(include=['object', 'category']).columns.tolist()
-    numeric_cols = X_sample.select_dtypes(include=['int64', 'float64']).columns.tolist()
-    
+def build_xy(df_x, df_y, df_y_hat):
+    """构建特征 X 和目标 delta_y = y - y_hat。"""
+    x = df_x.drop(columns=["Ref_ID"]).copy()
+    delta_y = pd.DataFrame(index=df_y.index)
+
+    for y_col, y_hat_col, delta_col in TARGET_MAP:
+        if y_col not in df_y.columns:
+            raise KeyError(f"train_y.csv 缺少列: {y_col}")
+        if y_hat_col not in df_y_hat.columns:
+            raise KeyError(f"train_y_hat.csv 缺少列: {y_hat_col}")
+        delta_y[delta_col] = df_y[y_col] - df_y_hat[y_hat_col]
+
+    return x, delta_y
+
+
+def build_model(x_sample):
+    """构建预处理+多输出回归模型。"""
+    categorical_cols = x_sample.select_dtypes(include=["object", "category"]).columns
+    numeric_cols = x_sample.select_dtypes(include=["number"]).columns
+
     preprocessor = ColumnTransformer(
         transformers=[
-            ('num', StandardScaler(), numeric_cols),
-            ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_cols)
-        ])
-    
-    # 随机森林多目标回归器
-    rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-    
-    pipeline = Pipeline(steps=[
-        ('preprocessor', preprocessor),
-        ('regressor', MultiOutputRegressor(rf))
-    ])
-    
-    return pipeline
+            ("num", StandardScaler(), list(numeric_cols)),
+            ("cat", OneHotEncoder(handle_unknown="ignore"), list(categorical_cols)),
+        ]
+    )
+
+    base_regressor = RandomForestRegressor(
+        n_estimators=300,
+        max_depth=None,
+        random_state=42,
+        n_jobs=-1,
+    )
+
+    return Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("regressor", MultiOutputRegressor(base_regressor)),
+        ]
+    )
+
 
 def main():
-    print(f"数据读取目录设定为: {DATA_DIR}")
-    
-    # 1. 加载数据
-    print("正在加载并对齐数据...")
-    train_x, train_y, train_y_hat = load_and_align_data('train')
-    test_x, test_y, test_y_hat = load_and_align_data('test')
-    
-    # 2. 构建特征和目标变量
-    X_train, Y_train = prepare_features_and_targets(train_x, train_y, train_y_hat)
-    X_test, Y_test = prepare_features_and_targets(test_x, test_y, test_y_hat)
-    
-    # 3. 构建模型 Pipeline
-    model = build_model_pipeline(X_train)
-    
-    # 4. 训练模型
-    print(f"开始训练模型，训练样本数: {len(X_train)} ...")
-    model.fit(X_train, Y_train)
-    print("模型训练完成！")
-    
-    # 5. 保存模型到 bin/train 目录
-    model_save_path = DATA_DIR / 'rf_delta_y_model.pkl'
-    joblib.dump(model, model_save_path)
-    print(f"✅ 模型已成功保存至: {model_save_path}")
-    
-    # 6. 模型验证评估
-    print("\n" + "="*30)
-    print("--- 验证集评估结果 ---")
-    Y_pred = model.predict(X_test)
-    Y_pred_df = pd.DataFrame(Y_pred, columns=Y_test.columns)
-    
-    for col in Y_test.columns:
-        mse = mean_squared_error(Y_test[col], Y_pred_df[col])
-        r2 = r2_score(Y_test[col], Y_pred_df[col])
-        print(f"👉 目标变量: {col}")
-        print(f"   MSE: {mse:.4f}")
-        print(f"   R² Score: {r2:.4f}\n")
-    print("="*30)
+    print(f"训练数据目录: {DATA_DIR}")
+    df_x, df_y, df_y_hat = load_train_dataset()
+    x, delta_y = build_xy(df_x, df_y, df_y_hat)
+
+    x_train, x_valid, y_train, y_valid = train_test_split(
+        x, delta_y, test_size=0.2, random_state=42
+    )
+
+    model = build_model(x_train)
+    model.fit(x_train, y_train)
+
+    y_pred = model.predict(x_valid)
+    y_pred_df = pd.DataFrame(y_pred, columns=y_valid.columns, index=y_valid.index)
+
+    print("\n验证集指标 (delta_y):")
+    for col in y_valid.columns:
+        mse = mean_squared_error(y_valid[col], y_pred_df[col])
+        r2 = r2_score(y_valid[col], y_pred_df[col])
+        print(f"{col}: MSE={mse:.6f}, R2={r2:.6f}")
+
+    model_path = DATA_DIR / "delta_y_model.pkl"
+    joblib.dump(model, model_path)
+    print(f"\n模型已保存: {model_path}")
+
 
 if __name__ == "__main__":
     main()
