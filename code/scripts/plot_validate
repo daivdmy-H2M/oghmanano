@@ -1,0 +1,93 @@
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import pandas as pd
+
+SCRIPT_PATH = Path(__file__).resolve()
+PROJECT_ROOT = SCRIPT_PATH.parent.parent
+TEST_DIR = PROJECT_ROOT / "bin" / "test"
+
+PRED_PATH = TEST_DIR / "test_delta_y_predictions.csv"
+FIGURE_DIR = TEST_DIR / "figures"
+
+
+def discover_targets(columns):
+    """从 *_true 列自动识别目标名。"""
+    targets = []
+    for col in columns:
+        if col.endswith("_true"):
+            targets.append(col[: -len("_true")])
+    return targets
+
+
+def plot_for_target(df, target):
+    true_col = f"{target}_true"
+    pred_col = f"{target}_pred"
+    err_col = f"{target}_error"
+
+    if not {true_col, pred_col, err_col}.issubset(df.columns):
+        raise KeyError(f"缺少绘图所需列: {true_col}, {pred_col}, {err_col}")
+
+    sub_df = df[[true_col, pred_col, err_col]].dropna()
+    if sub_df.empty:
+        print(f"⚠️ {target}: 可用数据为空，跳过绘图。")
+        return
+
+    plt.figure(figsize=(12, 5), dpi=120)
+
+    # 左图：真实 vs 预测散点图
+    ax1 = plt.subplot(1, 2, 1)
+    ax1.scatter(
+        sub_df[true_col],
+        sub_df[pred_col],
+        c="#1f77b4",
+        s=25,
+        alpha=0.75,
+        edgecolors="none",
+    )
+    min_val = min(sub_df[true_col].min(), sub_df[pred_col].min())
+    max_val = max(sub_df[true_col].max(), sub_df[pred_col].max())
+    ax1.plot([min_val, max_val], [min_val, max_val], color="black", linewidth=1)
+    ax1.set_title(f"{target}: True vs Pred")
+    ax1.set_xlabel("True delta_y")
+    ax1.set_ylabel("Pred delta_y")
+    ax1.grid(alpha=0.25)
+
+    # 右图：误差分布图
+    ax2 = plt.subplot(1, 2, 2)
+    ax2.hist(sub_df[err_col], bins=30, color="#ff7f0e", alpha=0.8, edgecolor="white")
+    ax2.axvline(0, color="black", linewidth=1)
+    ax2.set_title(f"{target}: Error Distribution")
+    ax2.set_xlabel("Prediction Error (pred - true)")
+    ax2.set_ylabel("Count")
+    ax2.grid(alpha=0.25)
+
+    plt.tight_layout()
+    output_path = FIGURE_DIR / f"{target}_analysis.png"
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+    print(f"✅ 已保存图像: {output_path}")
+
+
+def main():
+    if not PRED_PATH.exists():
+        raise FileNotFoundError(
+            f"找不到预测结果文件: {PRED_PATH}。请先运行 scripts/validate。"
+        )
+
+    FIGURE_DIR.mkdir(parents=True, exist_ok=True)
+    df = pd.read_csv(PRED_PATH)
+    targets = discover_targets(df.columns)
+
+    if not targets:
+        raise ValueError("未在预测文件中发现 *_true 列，无法识别目标字段。")
+
+    print(f"将为以下目标绘图: {targets}")
+    for target in targets:
+        plot_for_target(df, target)
+
+    print("\n全部分析图已生成完成。")
+
+
+if __name__ == "__main__":
+    main()

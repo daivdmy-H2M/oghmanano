@@ -130,3 +130,17 @@ python .\scripts\train
 并输出：
 - `bin/test/test_delta_y_predictions.csv`（每条样本的 true/pred/error）
 - `bin/test/test_delta_y_metrics.csv`（MAE/MSE/RMSE/R2 汇总）
+
+## 自动画图脚本（真实 vs 预测散点图 + 误差分布图）
+
+当 `bin/test/test_delta_y_predictions.csv` 已生成后，可运行：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\plot_validate
+```
+
+脚本会按目标自动识别并生成图像到：
+- `bin/test/figures/delta_Voc_analysis.png`
+- `bin/test/figures/delta_Jsc_analysis.png`
+- `bin/test/figures/delta_PCE_analysis.png`
+- `bin/test/figures/delta_FF_analysis.png`
