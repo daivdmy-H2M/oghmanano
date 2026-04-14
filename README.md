@@ -113,3 +113,20 @@ python .\scripts\train
 .\.venv\Scripts\activate.bat
 python .\scripts\train
 ```
+
+## test 集验证脚本（x -> 预测 delta_y，与真实 delta_y 对比）
+
+当 `bin/train/delta_y_model.pkl` 已生成后，可运行：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\validate
+```
+
+脚本会自动读取：
+- `bin/test/test_x.csv`
+- `bin/test/test_y.csv`
+- `bin/test/test_y_hat.csv`
+
+并输出：
+- `bin/test/test_delta_y_predictions.csv`（每条样本的 true/pred/error）
+- `bin/test/test_delta_y_metrics.csv`（MAE/MSE/RMSE/R2 汇总）
