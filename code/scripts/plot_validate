@@ -1,6 +1,7 @@
 from pathlib import Path
+import importlib.util
+import sys
 
-import matplotlib.pyplot as plt
 import pandas as pd
 
 SCRIPT_PATH = Path(__file__).resolve()
@@ -20,7 +21,7 @@ def discover_targets(columns):
     return targets
 
 
-def plot_for_target(df, target):
+def plot_for_target(df, target, plt):
     true_col = f"{target}_true"
     pred_col = f"{target}_pred"
     err_col = f"{target}_error"
@@ -70,6 +71,14 @@ def plot_for_target(df, target):
 
 
 def main():
+    if importlib.util.find_spec("matplotlib") is None:
+        print("❌ 未检测到 matplotlib，无法绘图。")
+        print("请先安装依赖后再运行：")
+        print(r"  .\.venv\Scripts\python.exe -m pip install -r .\requirements-train.txt")
+        sys.exit(1)
+
+    import matplotlib.pyplot as plt
+
     if not PRED_PATH.exists():
         raise FileNotFoundError(
             f"找不到预测结果文件: {PRED_PATH}。请先运行 scripts/validate。"
@@ -84,7 +93,7 @@ def main():
 
     print(f"将为以下目标绘图: {targets}")
     for target in targets:
-        plot_for_target(df, target)
+        plot_for_target(df, target, plt)
 
     print("\n全部分析图已生成完成。")
 

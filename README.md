@@ -136,6 +136,7 @@ python .\scripts\train
 当 `bin/test/test_delta_y_predictions.csv` 已生成后，可运行：
 
 ```powershell
+.\.venv\Scripts\python.exe -m pip install -r .\requirements-train.txt
 .\.venv\Scripts\python.exe .\scripts\plot_validate
 ```
 
