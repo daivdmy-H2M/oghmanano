@@ -1,0 +1,249 @@
+import os
+import json
+import shutil
+import math
+import pandas as pd
+import numpy as np
+
+# ---------------- 配置区域 (动态路径解析) ----------------
+# 1. 自动获取当前脚本所在的目录和项目根目录
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))  # 当前脚本所在目录 (如 scripts/)
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)               # 向上一级，获取项目根目录
+
+# 2. 拼接各个分类文件夹的绝对路径
+CSV_PATH = os.path.join(PROJECT_ROOT, "data", "Perovskite_database_content_all_data.csv")
+BASE_SIM_JSON = os.path.join(PROJECT_ROOT, "configs", "sim.json")
+
+# 3. 设定输出结果的确切存放目录 (指定桌面路径)
+RESULTS_DIR = r"C:\Users\刘惠雅\Desktop\VScode\PEDOT"
+os.makedirs(RESULTS_DIR, exist_ok=True) # 如果 results 文件夹不存在，自动创建
+
+# 4. OghmaNano 引擎路径
+OGHMA_ENGINE_PATH = r'"C:\Program Files (x86)\OghmaNano\oghma_core.exe"'
+
+# 检查依赖文件是否存在
+if not os.path.exists(CSV_PATH):
+    raise FileNotFoundError(f"未找到原始数据文件: {CSV_PATH}")
+if not os.path.exists(BASE_SIM_JSON):
+    raise FileNotFoundError(f"未找到基础配置文件: {BASE_SIM_JSON}")
+
+# ---------------- 辅助函数 ----------------
+def is_valid_data(val):
+    """判断数据是否有效（非空、非空白、非nan）"""
+    if pd.isna(val):
+        return False
+    val_str = str(val).strip().lower()
+    if val_str == '' or val_str == 'nan':
+        return False
+    return True
+
+def extract_first_valid_number(val):
+    """从含有 '|' 或 'nan' 的字符串中提取第一个有效的浮点数字"""
+    val_str = str(val)
+    if '|' in val_str:
+        parts = val_str.split('|')
+        for p in parts:
+            p = p.strip()
+            if p.lower() != 'nan' and p != '':
+                try:
+                    return float(p)
+                except ValueError:
+                    continue
+    else:
+        try:
+            return float(val_str)
+        except ValueError:
+            pass
+    return None
+
+# ---------------- 主程序 ----------------
+print("正在读取并过滤数据...")
+# 1. 读取数据
+df = pd.read_csv(CSV_PATH, low_memory=False)
+
+# 2. 数据过滤 (应用全新的筛选条件)
+df['Ref_ID_numeric'] = pd.to_numeric(df['Ref_ID'], errors='coerce')
+
+filtered_df = df[
+    (df['Substrate_stack_sequence'] == 'SLG | ITO') &
+    (df['ETL_stack_sequence'] == 'PEDOT:PSS') &
+    (df['Perovskite_composition_long_form'] == '(PEA)0.1FA0.15MA0.75SnBr0.24I2.76') &
+    (df['HTL_stack_sequence'] == 'PCBM-60') &
+    (df['Backcontact_stack_sequence'] == 'Al')
+]
+
+print(f"过滤完成，共有 {len(filtered_df)} 组符合条件的器件数据。")
+
+# 用于存储所有模拟结果的列表
+results_data = []
+
+# 3. 遍历每一组需要模拟的数据
+for index, row in filtered_df.iterrows():
+    ref_id = str(row['Ref_ID'])
+    print(f"\n--- 开始处理 Ref_ID: {ref_id} ---")
+    
+    # 将独立文件夹建立在指定的 results 目录下
+    run_dir = os.path.join(RESULTS_DIR, f"ref_{ref_id}")
+    os.makedirs(run_dir, exist_ok=True)
+    
+    # 复制 sim.json 到该文件夹
+    dst_sim = os.path.join(run_dir, "sim.json")
+    shutil.copyfile(BASE_SIM_JSON, dst_sim)
+    
+    # 读取新文件夹中的 sim.json 准备修改
+    with open(dst_sim, 'r', encoding='utf-8') as f:
+        sim_data = json.load(f)
+        
+    # --- 4. 数据预处理与 JSON 修改 ---
+    if 'sim' in sim_data:
+        sim_data['sim']['use_json_local_root'] = "false"
+        
+    # [核心修改]: 动态更新各层的材料路径和名称
+    epitaxy = sim_data.get('epitaxy', {})
+    
+    # segment0: Substrate (ITO)
+    if 'segment0' in epitaxy:
+        sim_data['epitaxy']['segment0']['name'] = "ITO"
+        sim_data['epitaxy']['segment0']['optical_material'] = "oxides/ITO/ito"
+        
+    # segment1: ETL (PEDOT:PSS)
+    if 'segment1' in epitaxy:
+        sim_data['epitaxy']['segment1']['name'] = "PEDOT:PSS"
+        sim_data['epitaxy']['segment1']['optical_material'] = "polymers/pedotpss"
+        
+    # segment2: Perovskite
+    if 'segment2' in epitaxy:
+        sim_data['epitaxy']['segment2']['name'] = "(PEA)0.1FA0.15MA0.75SnBr0.24I2.76"
+        sim_data['epitaxy']['segment2']['optical_material'] = "perovskites/std_preovskite"
+        
+    # segment3: HTL (PCBM-60)
+    if 'segment3' in epitaxy:
+        sim_data['epitaxy']['segment3']['name'] = "PCBM-60"
+        sim_data['epitaxy']['segment3']['optical_material'] = "small_molecules/pc60bm"
+        
+    # segment4: Backcontact (Al)
+    if 'segment4' in epitaxy:
+        sim_data['epitaxy']['segment4']['name'] = "Al"
+        sim_data['epitaxy']['segment4']['optical_material'] = "metal/Al/std"
+
+    THICKNESS_KEY = 'dy' 
+    
+    # A. 衬底厚度修改 (ITO)
+    sub_thick = row['Substrate_thickness']
+    if is_valid_data(sub_thick):
+        parts = str(sub_thick).split('|')
+        if len(parts) >= 2:
+            try:
+                fto_um = float(parts[1].strip())
+                sim_data['epitaxy']['segment0'][THICKNESS_KEY] = fto_um * 1e-6 
+            except ValueError:
+                pass 
+
+    # B. ETL厚度修改 (PEDOT:PSS)
+    etl_thick = row['ETL_thickness']
+    if is_valid_data(etl_thick):
+        valid_num = extract_first_valid_number(etl_thick)
+        if valid_num is not None:
+            sim_data['epitaxy']['segment1'][THICKNESS_KEY] = valid_num * 1e-9
+
+    # C. Perovskite厚度修改
+    pero_thick = row['Perovskite_thickness']
+    if is_valid_data(pero_thick):
+        valid_num = extract_first_valid_number(pero_thick)
+        if valid_num is not None:
+            sim_data['epitaxy']['segment2'][THICKNESS_KEY] = valid_num * 1e-9
+
+    # D. HTL厚度修改 (PCBM-60)
+    htl_thick = row['HTL_thickness_list']
+    if is_valid_data(htl_thick):
+        valid_num = extract_first_valid_number(htl_thick)
+        if valid_num is not None:
+            sim_data['epitaxy']['segment3'][THICKNESS_KEY] = valid_num * 1e-9
+
+    # E. Backcontact厚度修改 (Al)
+    au_thick = row['Backcontact_thickness_list']
+    if is_valid_data(au_thick):
+        valid_num = extract_first_valid_number(au_thick)
+        if valid_num is not None:
+            sim_data['epitaxy']['segment4'][THICKNESS_KEY] = valid_num * 1e-9
+
+    # F. 器件面积处理
+    cell_area = row['Cell_area_measured']
+    if is_valid_data(cell_area):
+        try:
+            area_cm2 = float(cell_area)
+            if area_cm2 > 0:
+                side_length_m = math.sqrt(area_cm2) / 100.0
+                sim_data['world']['world_data']['dx'] = side_length_m
+                sim_data['world']['world_data']['dz'] = side_length_m
+                
+                for i in range(5):
+                    seg_key = f"segment{i}"
+                    if seg_key in sim_data['epitaxy']:
+                        sim_data['epitaxy'][seg_key]['dx'] = side_length_m
+                        sim_data['epitaxy'][seg_key]['dz'] = side_length_m
+        except ValueError:
+            pass
+
+    # 将修改后的配置写回 sim.json
+    with open(dst_sim, 'w', encoding='utf-8') as f:
+        json.dump(sim_data, f, indent='\t', sort_keys=False)
+
+    # --- 5. 运行仿真 ---
+    os.chdir(run_dir)
+    print("正在运行仿真引擎...")
+    # 调用提取出来的全局引擎路径变量
+    os.system(OGHMA_ENGINE_PATH)
+    
+    # --- 6. 提取模拟结果 ---
+    sim_info_path = os.path.join(run_dir, "sim_info.dat")
+    
+    result_dict = {
+        'Ref_ID': ref_id,
+        'Simulation_Voc': np.nan,
+        'Simulation_Jsc': np.nan,
+        'Simulation_FF': np.nan,
+        'Simulation_PCE': np.nan,
+        'JV_default_Voc': row.get('JV_default_Voc', np.nan),
+        'JV_default_Jsc': row.get('JV_default_Jsc', np.nan),
+        'JV_default_FF': row.get('JV_default_FF', np.nan),
+        'JV_default_PCE': row.get('JV_default_PCE', np.nan)
+    }
+
+    if os.path.exists(sim_info_path):
+        try:
+            with open(sim_info_path, 'r', encoding='utf-8') as f:
+                sim_result = json.load(f)
+                
+                result_dict['Simulation_Voc'] = sim_result.get("voc", np.nan)
+                result_dict['Simulation_Jsc'] = sim_result.get("jsc", np.nan) 
+                result_dict['Simulation_FF'] = sim_result.get("ff", sim_result.get("fill_factor", np.nan)) 
+                result_dict['Simulation_PCE'] = sim_result.get("pce", sim_result.get("efficiency", np.nan)) 
+                
+            print("结果提取成功。")
+        except json.JSONDecodeError:
+            print("错误: sim_info.dat 文件格式损坏。")
+    else:
+        print("警告: 仿真可能未成功完成，未找到 sim_info.dat 输出文件。")
+        
+    results_data.append(result_dict)
+    
+    # 切回脚本所在目录，防止下一次循环的路径错乱
+    os.chdir(SCRIPT_DIR)
+
+# 7. 将所有结果导出为新的 CSV 文件
+print("\n所有仿真任务已完成，正在生成结果表格...")
+results_df = pd.DataFrame(results_data)
+
+columns_order = [
+    'Ref_ID', 
+    'Simulation_Voc', 'Simulation_Jsc', 'Simulation_PCE', 'Simulation_FF',
+    'JV_default_Voc', 'JV_default_Jsc', 'JV_default_PCE', 'JV_default_FF'
+]
+results_df = results_df[columns_order]
+
+# 将最终汇总表存放在指定的 results 目录下
+final_output_path = os.path.join(RESULTS_DIR, "simulation_results_summary.csv")
+results_df.to_csv(final_output_path, index=False)
+
+print(f"数据总表已成功保存至: {final_output_path}")

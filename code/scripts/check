@@ -1,0 +1,61 @@
+import os
+import pandas as pd
+
+def analyze_etl_materials():
+    # ==========================================
+    # 1. 动态获取路径
+    # ==========================================
+    # 获取当前代码文件所在的目录 (例如 .../scripts)
+    current_script_dir = os.path.dirname(os.path.abspath(__file__))
+    # 获取项目根目录
+    project_root = os.path.dirname(current_script_dir)
+    
+    # 数据库文件路径
+    data_dir = os.path.join(project_root, 'data')
+    db_input_file = os.path.join(data_dir, 'Perovskite_database_content_all_data.csv')
+
+    print(f"正在读取数据库文件: {db_input_file}")
+    print("-" * 50)
+
+    try:
+        # ==========================================
+        # 2. 读取数据
+        # ==========================================
+        # 使用 low_memory=False 避免读取大文件时的混合类型警告
+        df = pd.read_csv(db_input_file, low_memory=False)
+        
+        # ==========================================
+        # 3. 统计并输出 ETL_stack_sequence 的唯一值
+        # ==========================================
+        if 'ETL_stack_sequence' not in df.columns:
+            print("❌ 错误：在数据库中找不到 'ETL_stack_sequence' 这一列。")
+            return
+
+        # 提取该列，去除空值(NaN)，并获取所有不重复的唯一值
+        unique_etls = df['ETL_stack_sequence'].dropna().unique()
+        
+        # 将结果转换为列表并排序（可选，按首字母排序便于阅读）
+        # 将所有元素转为字符串再排序，防止有非字符串类型导致报错
+        unique_etls_list = sorted([str(item) for item in unique_etls])
+        
+        # 获取种类数量
+        total_kinds = len(unique_etls_list)
+        
+        # 打印结果
+        print(f"✅ 统计完成！")
+        print(f"在 'ETL_stack_sequence' 列中，总共发现了 【{total_kinds}】 种不同的数据/材料组合。\n")
+        print("具体罗列如下：")
+        print("-" * 50)
+        
+        for index, etl in enumerate(unique_etls_list, start=1):
+            print(f"{index}. {etl}")
+            
+        print("-" * 50)
+
+    except FileNotFoundError:
+        print(f"❌ 错误：找不到文件。请确保 {db_input_file} 存在。")
+    except Exception as e:
+        print(f"❌ 程序运行时发生未知错误: {e}")
+
+if __name__ == "__main__":
+    analyze_etl_materials()
