@@ -1,0 +1,316 @@
+#!/usr/bin/env python3
+"""
+训练一个从 x 到 delta_y 的线性模型：
+    delta_y = y - y_hat
+
+数据来源：
+- code/bin/train/train_x.csv
+- code/bin/train/train_y.csv
+- code/bin/train/train_y_hat.csv
+
+模型：多输出 Ridge 线性回归（纯 Python 实现，无第三方依赖）
+输出：
+- code/bin/train/delta_model.json
+- code/bin/train/validation_predictions.csv
+"""
+
+from __future__ import annotations
+
+import csv
+import json
+import math
+import os
+from typing import Dict, List, Tuple
+
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+TRAIN_DIR = os.path.join(PROJECT_ROOT, "bin", "train")
+
+TRAIN_X_PATH = os.path.join(TRAIN_DIR, "train_x.csv")
+TRAIN_Y_PATH = os.path.join(TRAIN_DIR, "train_y.csv")
+TRAIN_Y_HAT_PATH = os.path.join(TRAIN_DIR, "train_y_hat.csv")
+
+MODEL_OUTPUT_PATH = os.path.join(TRAIN_DIR, "delta_model.json")
+VALIDATION_OUTPUT_PATH = os.path.join(TRAIN_DIR, "validation_predictions.csv")
+
+# 可根据需要调整
+RIDGE_ALPHA = 1e-3
+TRAIN_RATIO = 0.8
+
+NUMERIC_FEATURES = [
+    "Cell_area",
+    "Substrate_thickness",
+    "ETL_thickness",
+    "Perovskite_thickness",
+    "HTL_thickness",
+    "Backcontact_thickness",
+]
+
+CATEGORICAL_FEATURES = [
+    "Layer_1",
+    "Layer_1_material",
+    "Layer_2",
+    "Layer_2_material",
+    "Layer_3",
+    "Layer_3_material",
+    "Layer_4",
+    "Layer_4_material",
+    "Layer_5",
+    "Layer_5_material",
+]
+
+TARGET_SPECS = [
+    ("delta_voc", "Simulation_Voc", "JV_default_Voc"),
+    ("delta_jsc", "Simulation_Jsc", "JV_default_Jsc"),
+    ("delta_pce", "Simulation_PCE", "JV_default_PCE"),
+    ("delta_ff", "Simulation_FF", "JV_default_FF"),
+]
+
+
+def read_csv_as_dict(path: str, key: str = "Ref_ID") -> Dict[str, Dict[str, str]]:
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        data = {}
+        for row in reader:
+            row_key = str(row[key]).strip()
+            data[row_key] = row
+    return data
+
+
+def safe_float(v: str, default: float = 0.0) -> float:
+    try:
+        return float(str(v).strip())
+    except Exception:
+        return default
+
+
+def train_valid_split(ref_ids: List[str], ratio: float = 0.8) -> Tuple[List[str], List[str]]:
+    # 按 Ref_ID 数值排序后切分，保证可复现
+    ordered = sorted(ref_ids, key=lambda x: int(float(x)))
+    split_at = max(1, int(len(ordered) * ratio))
+    split_at = min(split_at, len(ordered) - 1)
+    return ordered[:split_at], ordered[split_at:]
+
+
+def build_category_maps(rows_x: Dict[str, Dict[str, str]], train_ids: List[str]) -> Dict[str, List[str]]:
+    maps: Dict[str, List[str]] = {}
+    for col in CATEGORICAL_FEATURES:
+        values = sorted({str(rows_x[rid].get(col, "")).strip() for rid in train_ids})
+        maps[col] = values
+    return maps
+
+
+def compute_numeric_stats(rows_x: Dict[str, Dict[str, str]], train_ids: List[str]) -> Dict[str, Tuple[float, float]]:
+    stats = {}
+    for col in NUMERIC_FEATURES:
+        vals = [safe_float(rows_x[rid].get(col, "0"), 0.0) for rid in train_ids]
+        mean = sum(vals) / len(vals)
+        var = sum((v - mean) ** 2 for v in vals) / len(vals)
+        std = math.sqrt(var)
+        if std < 1e-12:
+            std = 1.0
+        stats[col] = (mean, std)
+    return stats
+
+
+def vectorize_x(
+    row_x: Dict[str, str],
+    numeric_stats: Dict[str, Tuple[float, float]],
+    category_maps: Dict[str, List[str]],
+) -> Tuple[List[float], List[str]]:
+    vec = [1.0]  # bias
+    names = ["bias"]
+
+    for col in NUMERIC_FEATURES:
+        mean, std = numeric_stats[col]
+        val = safe_float(row_x.get(col, "0"), 0.0)
+        vec.append((val - mean) / std)
+        names.append(f"num::{col}")
+
+    for col in CATEGORICAL_FEATURES:
+        v = str(row_x.get(col, "")).strip()
+        for cat in category_maps[col]:
+            vec.append(1.0 if v == cat else 0.0)
+            names.append(f"cat::{col}=={cat}")
+
+    return vec, names
+
+
+def build_delta_y(row_y: Dict[str, str], row_y_hat: Dict[str, str]) -> List[float]:
+    vals = []
+    for _, y_col, y_hat_col in TARGET_SPECS:
+        y_val = safe_float(row_y.get(y_col, "0"), 0.0)
+        y_hat_val = safe_float(row_y_hat.get(y_hat_col, "0"), 0.0)
+        vals.append(y_val - y_hat_val)
+    return vals
+
+
+def transpose(a: List[List[float]]) -> List[List[float]]:
+    return [list(row) for row in zip(*a)]
+
+
+def matmul(a: List[List[float]], b: List[List[float]]) -> List[List[float]]:
+    n, m, p = len(a), len(a[0]), len(b[0])
+    out = [[0.0] * p for _ in range(n)]
+    for i in range(n):
+        for k in range(m):
+            aik = a[i][k]
+            if abs(aik) < 1e-15:
+                continue
+            for j in range(p):
+                out[i][j] += aik * b[k][j]
+    return out
+
+
+def inverse_matrix(a: List[List[float]]) -> List[List[float]]:
+    n = len(a)
+    aug = [row[:] + [1.0 if i == j else 0.0 for j in range(n)] for i, row in enumerate(a)]
+
+    for col in range(n):
+        pivot = max(range(col, n), key=lambda r: abs(aug[r][col]))
+        if abs(aug[pivot][col]) < 1e-15:
+            raise ValueError("矩阵不可逆，请增大 RIDGE_ALPHA")
+        if pivot != col:
+            aug[col], aug[pivot] = aug[pivot], aug[col]
+
+        pivot_val = aug[col][col]
+        inv_pivot = 1.0 / pivot_val
+        for j in range(2 * n):
+            aug[col][j] *= inv_pivot
+
+        for r in range(n):
+            if r == col:
+                continue
+            factor = aug[r][col]
+            if abs(factor) < 1e-15:
+                continue
+            for j in range(2 * n):
+                aug[r][j] -= factor * aug[col][j]
+
+    return [row[n:] for row in aug]
+
+
+def ridge_fit_multi_output(x: List[List[float]], y: List[List[float]], alpha: float) -> List[List[float]]:
+    xt = transpose(x)
+    xtx = matmul(xt, x)
+    d = len(xtx)
+    for i in range(d):
+        xtx[i][i] += alpha
+    xtx_inv = inverse_matrix(xtx)
+    xty = matmul(xt, y)
+    w = matmul(xtx_inv, xty)
+    return w
+
+
+def predict(x: List[List[float]], w: List[List[float]]) -> List[List[float]]:
+    return matmul(x, w)
+
+
+def metrics(y_true: List[List[float]], y_pred: List[List[float]]) -> Dict[str, Dict[str, float]]:
+    n = len(y_true)
+    t = len(TARGET_SPECS)
+    out: Dict[str, Dict[str, float]] = {}
+
+    for j in range(t):
+        name = TARGET_SPECS[j][0]
+        yt = [y_true[i][j] for i in range(n)]
+        yp = [y_pred[i][j] for i in range(n)]
+        err = [yp[i] - yt[i] for i in range(n)]
+        mae = sum(abs(e) for e in err) / n
+        rmse = math.sqrt(sum(e * e for e in err) / n)
+        mean_y = sum(yt) / n
+        ss_res = sum((yt[i] - yp[i]) ** 2 for i in range(n))
+        ss_tot = sum((v - mean_y) ** 2 for v in yt)
+        r2 = 1.0 - ss_res / ss_tot if ss_tot > 1e-15 else 0.0
+        out[name] = {"mae": mae, "rmse": rmse, "r2": r2}
+
+    return out
+
+
+def main() -> None:
+    for p in [TRAIN_X_PATH, TRAIN_Y_PATH, TRAIN_Y_HAT_PATH]:
+        if not os.path.exists(p):
+            raise FileNotFoundError(f"未找到训练文件: {p}")
+
+    rows_x = read_csv_as_dict(TRAIN_X_PATH)
+    rows_y = read_csv_as_dict(TRAIN_Y_PATH)
+    rows_y_hat = read_csv_as_dict(TRAIN_Y_HAT_PATH)
+
+    common_ids = sorted(set(rows_x.keys()) & set(rows_y.keys()) & set(rows_y_hat.keys()), key=lambda x: int(float(x)))
+    if len(common_ids) < 2:
+        raise RuntimeError("可用样本不足，至少需要 2 条")
+
+    train_ids, valid_ids = train_valid_split(common_ids, ratio=TRAIN_RATIO)
+
+    category_maps = build_category_maps(rows_x, train_ids)
+    numeric_stats = compute_numeric_stats(rows_x, train_ids)
+
+    feature_names: List[str] = []
+    x_train: List[List[float]] = []
+    y_train: List[List[float]] = []
+    for rid in train_ids:
+        x_vec, names = vectorize_x(rows_x[rid], numeric_stats, category_maps)
+        if not feature_names:
+            feature_names = names
+        x_train.append(x_vec)
+        y_train.append(build_delta_y(rows_y[rid], rows_y_hat[rid]))
+
+    x_valid: List[List[float]] = []
+    y_valid: List[List[float]] = []
+    for rid in valid_ids:
+        x_vec, _ = vectorize_x(rows_x[rid], numeric_stats, category_maps)
+        x_valid.append(x_vec)
+        y_valid.append(build_delta_y(rows_y[rid], rows_y_hat[rid]))
+
+    w = ridge_fit_multi_output(x_train, y_train, alpha=RIDGE_ALPHA)
+    y_valid_pred = predict(x_valid, w)
+    valid_metrics = metrics(y_valid, y_valid_pred)
+
+    print("=== 训练完成 ===")
+    print(f"总样本: {len(common_ids)} | 训练集: {len(train_ids)} | 验证集: {len(valid_ids)}")
+    print(f"特征维度: {len(feature_names)}")
+    print("\n=== 验证集指标（预测 delta_y）===")
+    for target_name, m in valid_metrics.items():
+        print(
+            f"{target_name}: MAE={m['mae']:.6f}, RMSE={m['rmse']:.6f}, R2={m['r2']:.6f}"
+        )
+
+    model_obj = {
+        "model_type": "ridge_linear_multi_output",
+        "description": "Predict delta_y = y - y_hat from x",
+        "ridge_alpha": RIDGE_ALPHA,
+        "train_ratio": TRAIN_RATIO,
+        "train_size": len(train_ids),
+        "valid_size": len(valid_ids),
+        "feature_names": feature_names,
+        "target_names": [t[0] for t in TARGET_SPECS],
+        "numeric_stats": {k: {"mean": v[0], "std": v[1]} for k, v in numeric_stats.items()},
+        "category_maps": category_maps,
+        "weights": w,
+        "validation_metrics": valid_metrics,
+    }
+
+    with open(MODEL_OUTPUT_PATH, "w", encoding="utf-8") as f:
+        json.dump(model_obj, f, ensure_ascii=False, indent=2)
+
+    with open(VALIDATION_OUTPUT_PATH, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        header = ["Ref_ID"]
+        for target_name, _, _ in TARGET_SPECS:
+            header.append(f"true_{target_name}")
+            header.append(f"pred_{target_name}")
+        writer.writerow(header)
+
+        for rid, yt, yp in zip(valid_ids, y_valid, y_valid_pred):
+            row = [rid]
+            for a, b in zip(yt, yp):
+                row.extend([a, b])
+            writer.writerow(row)
+
+    print(f"\n模型文件已保存: {MODEL_OUTPUT_PATH}")
+    print(f"验证集预测已保存: {VALIDATION_OUTPUT_PATH}")
+
+
+if __name__ == "__main__":
+    main()
