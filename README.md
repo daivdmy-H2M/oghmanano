@@ -179,4 +179,16 @@ python .\scripts\train
 - `bin/train/figures/delta_PCE_analysis.png`
 - `bin/train/figures/delta_FF_analysis.png`
 
+如果希望画出 **train 与 test 在同一张 Actual vs Predicted 散点图上的分散对比**（蓝色圆圈 train，红色方框 test）：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\plot_validate --dataset both
+```
+
+图像输出到：
+- `bin/compare/figures/delta_Voc_train_test_compare.png`
+- `bin/compare/figures/delta_Jsc_train_test_compare.png`
+- `bin/compare/figures/delta_PCE_train_test_compare.png`
+- `bin/compare/figures/delta_FF_train_test_compare.png`
+
 > 若运行 `validate` 时提示 `PermissionError: ... denied`，通常是目标 CSV 正在被 Excel 占用。关闭该文件后重试即可；脚本也会自动回退为带时间戳的新文件名保存。
