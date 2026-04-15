@@ -1,15 +1,42 @@
 from pathlib import Path
+import argparse
 import importlib.util
 import sys
 
 import pandas as pd
+from sklearn.metrics import r2_score
 
 SCRIPT_PATH = Path(__file__).resolve()
 PROJECT_ROOT = SCRIPT_PATH.parent.parent
-TEST_DIR = PROJECT_ROOT / "bin" / "test"
+BIN_DIR = PROJECT_ROOT / "bin"
 
-PRED_PATH = TEST_DIR / "test_delta_y_predictions.csv"
-FIGURE_DIR = TEST_DIR / "figures"
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="绘制 train/test 的 delta_y 预测散点图（支持训练集与测试集对比）。"
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=["train", "test", "both"],
+        default="test",
+        help="train/test 绘制单数据集分析图；both 绘制 train/test 对比散点图。",
+    )
+    return parser.parse_args()
+
+
+def resolve_paths(dataset):
+    if dataset == "both":
+        return {
+            "train_pred_path": BIN_DIR / "train" / "train_delta_y_predictions.csv",
+            "test_pred_path": BIN_DIR / "test" / "test_delta_y_predictions.csv",
+            "figure_dir": BIN_DIR / "compare" / "figures",
+        }
+
+    data_dir = BIN_DIR / dataset
+    return {
+        "pred_path": data_dir / f"{dataset}_delta_y_predictions.csv",
+        "figure_dir": data_dir / "figures",
+    }
 
 
 def discover_targets(columns):
@@ -21,7 +48,7 @@ def discover_targets(columns):
     return targets
 
 
-def plot_for_target(df, target, plt):
+def plot_for_target(df, target, output_dir, plt):
     true_col = f"{target}_true"
     pred_col = f"{target}_pred"
     err_col = f"{target}_error"
@@ -48,11 +75,12 @@ def plot_for_target(df, target, plt):
     )
     min_val = min(sub_df[true_col].min(), sub_df[pred_col].min())
     max_val = max(sub_df[true_col].max(), sub_df[pred_col].max())
-    ax1.plot([min_val, max_val], [min_val, max_val], color="black", linewidth=1)
+    ax1.plot([min_val, max_val], [min_val, max_val], color="black", linewidth=1, label="y=x")
     ax1.set_title(f"{target}: True vs Pred")
     ax1.set_xlabel("True delta_y")
     ax1.set_ylabel("Pred delta_y")
     ax1.grid(alpha=0.25)
+    ax1.legend(loc="lower right", fontsize=8)
 
     # 右图：误差分布图
     ax2 = plt.subplot(1, 2, 2)
@@ -64,13 +92,90 @@ def plot_for_target(df, target, plt):
     ax2.grid(alpha=0.25)
 
     plt.tight_layout()
-    output_path = FIGURE_DIR / f"{target}_analysis.png"
+    output_path = output_dir / f"{target}_analysis.png"
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+    print(f"✅ 已保存图像: {output_path}")
+
+
+def plot_train_test_comparison(train_df, test_df, target, output_dir, plt):
+    true_col = f"{target}_true"
+    pred_col = f"{target}_pred"
+
+    required_cols = {true_col, pred_col}
+    if not required_cols.issubset(train_df.columns):
+        raise KeyError(f"train 预测结果缺少列: {required_cols}")
+    if not required_cols.issubset(test_df.columns):
+        raise KeyError(f"test 预测结果缺少列: {required_cols}")
+
+    train_sub = train_df[[true_col, pred_col]].dropna()
+    test_sub = test_df[[true_col, pred_col]].dropna()
+    if train_sub.empty and test_sub.empty:
+        print(f"⚠️ {target}: train/test 都没有可用数据，跳过。")
+        return
+
+    combined = pd.concat([train_sub, test_sub], axis=0)
+    min_val = min(combined[true_col].min(), combined[pred_col].min())
+    max_val = max(combined[true_col].max(), combined[pred_col].max())
+    padding = (max_val - min_val) * 0.05 if max_val > min_val else 0.1
+
+    r2_train = (
+        r2_score(train_sub[true_col], train_sub[pred_col]) if len(train_sub) >= 2 else float("nan")
+    )
+    r2_test = (
+        r2_score(test_sub[true_col], test_sub[pred_col]) if len(test_sub) >= 2 else float("nan")
+    )
+
+    plt.figure(figsize=(6, 6), dpi=140)
+    ax = plt.gca()
+    ax.scatter(
+        train_sub[true_col],
+        train_sub[pred_col],
+        s=24,
+        facecolors="none",
+        edgecolors="#1f5aa6",
+        linewidths=1.0,
+        marker="o",
+        label=f"train (R²={r2_train:.3f})" if pd.notna(r2_train) else "train",
+    )
+    ax.scatter(
+        test_sub[true_col],
+        test_sub[pred_col],
+        s=24,
+        facecolors="none",
+        edgecolors="#d62728",
+        linewidths=1.0,
+        marker="s",
+        label=f"test (R²={r2_test:.3f})" if pd.notna(r2_test) else "test",
+    )
+    ax.plot(
+        [min_val - padding, max_val + padding],
+        [min_val - padding, max_val + padding],
+        linestyle="--",
+        color="black",
+        linewidth=1.2,
+    )
+    ax.set_xlim(min_val - padding, max_val + padding)
+    ax.set_ylim(min_val - padding, max_val + padding)
+    ax.set_xlabel("Actual Values")
+    ax.set_ylabel("Predicted Values")
+    ax.set_title(f"{target} - Train vs Test")
+    ax.legend(loc="upper left")
+    ax.grid(alpha=0.2)
+    plt.tight_layout()
+
+    output_path = output_dir / f"{target}_train_test_compare.png"
     plt.savefig(output_path, bbox_inches="tight")
     plt.close()
     print(f"✅ 已保存图像: {output_path}")
 
 
 def main():
+    args = parse_args()
+    dataset = args.dataset
+    paths = resolve_paths(dataset)
+    figure_dir = paths["figure_dir"]
+
     if importlib.util.find_spec("matplotlib") is None:
         print("❌ 未检测到 matplotlib，无法绘图。")
         print("请先安装依赖后再运行：")
@@ -79,21 +184,43 @@ def main():
 
     import matplotlib.pyplot as plt
 
-    if not PRED_PATH.exists():
-        raise FileNotFoundError(
-            f"找不到预测结果文件: {PRED_PATH}。请先运行 scripts/validate。"
-        )
+    figure_dir.mkdir(parents=True, exist_ok=True)
+    if dataset == "both":
+        train_pred_path = paths["train_pred_path"]
+        test_pred_path = paths["test_pred_path"]
+        if not train_pred_path.exists() or not test_pred_path.exists():
+            raise FileNotFoundError(
+                "找不到 train/test 预测结果文件。请先运行 scripts/validate --dataset both。"
+            )
 
-    FIGURE_DIR.mkdir(parents=True, exist_ok=True)
-    df = pd.read_csv(PRED_PATH)
-    targets = discover_targets(df.columns)
+        train_df = pd.read_csv(train_pred_path)
+        test_df = pd.read_csv(test_pred_path)
+        train_targets = set(discover_targets(train_df.columns))
+        test_targets = set(discover_targets(test_df.columns))
+        targets = sorted(train_targets & test_targets)
 
-    if not targets:
-        raise ValueError("未在预测文件中发现 *_true 列，无法识别目标字段。")
+        if not targets:
+            raise ValueError("train/test 预测文件中未发现共同的 *_true 列，无法绘图。")
 
-    print(f"将为以下目标绘图: {targets}")
-    for target in targets:
-        plot_for_target(df, target, plt)
+        print(f"将为以下目标绘制 train/test 对比散点图: {targets}")
+        for target in targets:
+            plot_train_test_comparison(train_df, test_df, target, figure_dir, plt)
+    else:
+        pred_path = paths["pred_path"]
+        if not pred_path.exists():
+            raise FileNotFoundError(
+                f"找不到预测结果文件: {pred_path}。请先运行 scripts/validate。"
+            )
+
+        df = pd.read_csv(pred_path)
+        targets = discover_targets(df.columns)
+
+        if not targets:
+            raise ValueError("未在预测文件中发现 *_true 列，无法识别目标字段。")
+
+        print(f"将为以下目标绘图: {targets}")
+        for target in targets:
+            plot_for_target(df, target, figure_dir, plt)
 
     print("\n全部分析图已生成完成。")
 
