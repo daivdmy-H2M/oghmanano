@@ -22,10 +22,10 @@ def generate_scatter_plots():
         df_y = pd.read_csv(file_y)
         df_y_hat = pd.read_csv(file_y_hat)
         
-        # 【核心修复部分】
-        # 为了避免两个表格都有 'JV_default_Voc' 导致合并后列名变成 _x 和 _y
-        # 我们在合并前，先将 df_y 中的重复列临时剔除，这样合并后的表格列名就纯净了
-        df_merged = pd.merge(df_y.drop(columns=['JV_default_Voc']), df_y_hat, on='Ref_ID', how='inner')
+        # 如果 df_y 中存在 JV_default_Voc（历史文件），先剔除避免合并列名污染
+        if 'JV_default_Voc' in df_y.columns:
+            df_y = df_y.drop(columns=['JV_default_Voc'])
+        df_merged = pd.merge(df_y, df_y_hat, on='Ref_ID', how='inner')
 
         # 设置全局绘图参数
         plt.rcParams['text.color'] = 'black'
