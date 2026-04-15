@@ -143,6 +143,15 @@ python .\scripts\train
 - `bin/train/train_delta_y_predictions.csv`（每条样本的 true/pred/error）
 - `bin/train/train_delta_y_metrics.csv`（MAE/MSE/RMSE/R2 汇总）
 
+如果希望**一次性同时跑 train + test，并对比两边指标判断是否可能过拟合**，可运行：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\validate --dataset both
+```
+
+会额外输出：
+- `bin/overfit_comparison.csv`（train/test 指标并排 + gap 差值）
+
 ## 自动画图脚本（真实 vs 预测散点图 + 误差分布图）
 
 当 `bin/test/test_delta_y_predictions.csv` 已生成后，可运行：

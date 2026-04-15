@@ -23,13 +23,13 @@ TARGET_MAP = [
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="使用训练好的模型评估 train 或 test 数据集。"
+        description="使用训练好的模型评估 train/test 数据集，并可对比过拟合迹象。"
     )
     parser.add_argument(
         "--dataset",
-        choices=["train", "test"],
+        choices=["train", "test", "both"],
         default="test",
-        help="选择要评估的数据集，默认 test。",
+        help="选择要评估的数据集；both 会同时评估 train 与 test 并输出对比表。",
     )
     return parser.parse_args()
 
@@ -137,20 +137,9 @@ def safe_save_csv(df, output_path):
         return fallback_path
 
 
-def main():
-    args = parse_args()
-    dataset = args.dataset
+def run_single_dataset(model, dataset):
     dataset_paths = resolve_dataset_paths(dataset)
-
-    if not MODEL_PATH.exists():
-        raise FileNotFoundError(
-            f"找不到训练好的模型: {MODEL_PATH}。请先运行 scripts/train 生成模型。"
-        )
-
-    print(f"加载模型: {MODEL_PATH}")
-    model = joblib.load(MODEL_PATH)
-
-    print(f"正在评估数据集: {dataset}")
+    print(f"\n正在评估数据集: {dataset}")
     data_x, data_y, data_y_hat = load_dataset(dataset_paths, dataset)
     x_features = data_x.drop(columns=["Ref_ID"]).copy()
     delta_true = build_true_delta(data_y, data_y_hat)
@@ -174,8 +163,68 @@ def main():
     saved_prediction_path = safe_save_csv(result_df, prediction_output)
     saved_metric_path = safe_save_csv(metrics_df, metric_output)
 
-    print(f"\n已保存逐样本对比结果: {saved_prediction_path}")
+    print(f"已保存逐样本对比结果: {saved_prediction_path}")
     print(f"已保存指标汇总结果: {saved_metric_path}")
+
+    return metrics_df
+
+
+def build_overfit_comparison(metrics_train, metrics_test):
+    train_df = metrics_train.rename(
+        columns={
+            "sample_count": "train_sample_count",
+            "MAE": "train_MAE",
+            "MSE": "train_MSE",
+            "RMSE": "train_RMSE",
+            "R2": "train_R2",
+        }
+    )
+    test_df = metrics_test.rename(
+        columns={
+            "sample_count": "test_sample_count",
+            "MAE": "test_MAE",
+            "MSE": "test_MSE",
+            "RMSE": "test_RMSE",
+            "R2": "test_R2",
+        }
+    )
+    merged = pd.merge(train_df, test_df, on="target", how="inner")
+    merged["gap_MAE(test-train)"] = merged["test_MAE"] - merged["train_MAE"]
+    merged["gap_RMSE(test-train)"] = merged["test_RMSE"] - merged["train_RMSE"]
+    merged["gap_R2(train-test)"] = merged["train_R2"] - merged["test_R2"]
+    return merged
+
+
+def main():
+    args = parse_args()
+    dataset = args.dataset
+
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(
+            f"找不到训练好的模型: {MODEL_PATH}。请先运行 scripts/train 生成模型。"
+        )
+
+    print(f"加载模型: {MODEL_PATH}")
+    model = joblib.load(MODEL_PATH)
+
+    if dataset in {"train", "test"}:
+        run_single_dataset(model, dataset)
+        return
+
+    metrics_train = run_single_dataset(model, "train")
+    metrics_test = run_single_dataset(model, "test")
+    compare_df = build_overfit_comparison(metrics_train, metrics_test)
+    compare_output = PROJECT_ROOT / "bin" / "overfit_comparison.csv"
+    saved_compare_path = safe_save_csv(compare_df, compare_output)
+
+    print("\ntrain/test 指标对比（用于观察过拟合迹象）:")
+    for _, row in compare_df.iterrows():
+        print(
+            f"{row['target']}: "
+            f"train_R2={row['train_R2']:.6f}, test_R2={row['test_R2']:.6f}, "
+            f"R2差(train-test)={row['gap_R2(train-test)']:.6f}"
+        )
+    print(f"\n已保存过拟合对比表: {saved_compare_path}")
 
 
 if __name__ == "__main__":
