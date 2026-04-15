@@ -169,3 +169,5 @@ python .\scripts\train
 - `bin/train/figures/delta_Jsc_analysis.png`
 - `bin/train/figures/delta_PCE_analysis.png`
 - `bin/train/figures/delta_FF_analysis.png`
+
+> 若运行 `validate` 时提示 `PermissionError: ... denied`，通常是目标 CSV 正在被 Excel 占用。关闭该文件后重试即可；脚本也会自动回退为带时间戳的新文件名保存。
