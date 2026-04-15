@@ -1,5 +1,6 @@
 from pathlib import Path
 import argparse
+from datetime import datetime
 
 import joblib
 import pandas as pd
@@ -85,9 +86,9 @@ def build_true_delta(test_y, test_y_hat):
     return delta_true
 
 
-def evaluate_predictions(delta_true, delta_pred):
+def evaluate_predictions(delta_true, delta_pred, dataset_name):
     rows = []
-    print("\n测试集 delta_y 评估结果:")
+    print(f"\n{dataset_name} 集 delta_y 评估结果:")
     for col in delta_true.columns:
         valid_mask = ~(delta_true[col].isna() | delta_pred[col].isna())
         y_true_col = delta_true.loc[valid_mask, col]
@@ -115,6 +116,27 @@ def evaluate_predictions(delta_true, delta_pred):
     return pd.DataFrame(rows)
 
 
+def safe_save_csv(df, output_path):
+    """
+    尝试保存 CSV；若目标文件被占用（常见于 Excel 打开）导致 PermissionError，
+    自动改名为时间戳文件并继续保存，避免脚本直接崩溃。
+    """
+    try:
+        df.to_csv(output_path, index=False, encoding="utf-8-sig")
+        return output_path
+    except PermissionError:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fallback_path = output_path.with_name(
+            f"{output_path.stem}_{timestamp}{output_path.suffix}"
+        )
+        df.to_csv(fallback_path, index=False, encoding="utf-8-sig")
+        print(
+            f"⚠️ 无法写入 {output_path}（可能正被其它程序占用），"
+            f"已改为保存到: {fallback_path}"
+        )
+        return fallback_path
+
+
 def main():
     args = parse_args()
     dataset = args.dataset
@@ -138,7 +160,7 @@ def main():
         delta_pred_array, columns=delta_true.columns, index=delta_true.index
     )
 
-    metrics_df = evaluate_predictions(delta_true, delta_pred)
+    metrics_df = evaluate_predictions(delta_true, delta_pred, dataset)
 
     result_df = pd.DataFrame({"Ref_ID": data_x["Ref_ID"]})
     for col in delta_true.columns:
@@ -149,11 +171,11 @@ def main():
     prediction_output = dataset_paths["prediction_output"]
     metric_output = dataset_paths["metric_output"]
     prediction_output.parent.mkdir(parents=True, exist_ok=True)
-    result_df.to_csv(prediction_output, index=False, encoding="utf-8-sig")
-    metrics_df.to_csv(metric_output, index=False, encoding="utf-8-sig")
+    saved_prediction_path = safe_save_csv(result_df, prediction_output)
+    saved_metric_path = safe_save_csv(metrics_df, metric_output)
 
-    print(f"\n已保存逐样本对比结果: {prediction_output}")
-    print(f"已保存指标汇总结果: {metric_output}")
+    print(f"\n已保存逐样本对比结果: {saved_prediction_path}")
+    print(f"已保存指标汇总结果: {saved_metric_path}")
 
 
 if __name__ == "__main__":
