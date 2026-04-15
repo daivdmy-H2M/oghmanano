@@ -71,6 +71,8 @@ main 5 ：
 
 脚本会：
 - 自动剔除 `analyses_y.csv` 里的 `JV_default_Voc`（若存在历史残留）。
+- 自动从 `train/test_delta_y_predictions.csv` 中识别 `delta_Jsc_true ≈ -4.2` 的异常点并记录其 `Ref_ID`，在切分前整体剔除该 ID 的全部数据。
+- 若需手工指定剔除 ID，可在 `bin/excluded_ref_ids.txt` 中每行填写一个 `Ref_ID`（支持 `#` 注释）。
 - 按 `Ref_ID` 对齐三份数据后，随机切分为 75% 训练集、25% 测试集（`random_state=42`）。
 - 输出到：
   - `bin/train/train_x.csv`
