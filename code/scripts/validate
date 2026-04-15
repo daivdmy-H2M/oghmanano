@@ -1,4 +1,6 @@
 from pathlib import Path
+import argparse
+from datetime import datetime
 
 import joblib
 import pandas as pd
@@ -10,8 +12,6 @@ TRAIN_DIR = PROJECT_ROOT / "bin" / "train"
 TEST_DIR = PROJECT_ROOT / "bin" / "test"
 
 MODEL_PATH = TRAIN_DIR / "delta_y_model.pkl"
-PREDICTION_OUTPUT = TEST_DIR / "test_delta_y_predictions.csv"
-METRIC_OUTPUT = TEST_DIR / "test_delta_y_metrics.csv"
 
 TARGET_MAP = [
     ("Simulation_Voc", "JV_default_Voc", "delta_Voc"),
@@ -21,26 +21,56 @@ TARGET_MAP = [
 ]
 
 
-def load_test_data():
-    x_path = TEST_DIR / "test_x.csv"
-    y_path = TEST_DIR / "test_y.csv"
-    y_hat_path = TEST_DIR / "test_y_hat.csv"
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="使用训练好的模型评估 train 或 test 数据集。"
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=["train", "test"],
+        default="test",
+        help="选择要评估的数据集，默认 test。",
+    )
+    return parser.parse_args()
+
+
+def resolve_dataset_paths(dataset):
+    if dataset == "train":
+        data_dir = TRAIN_DIR
+    else:
+        data_dir = TEST_DIR
+
+    return {
+        "x_path": data_dir / f"{dataset}_x.csv",
+        "y_path": data_dir / f"{dataset}_y.csv",
+        "y_hat_path": data_dir / f"{dataset}_y_hat.csv",
+        "prediction_output": data_dir / f"{dataset}_delta_y_predictions.csv",
+        "metric_output": data_dir / f"{dataset}_delta_y_metrics.csv",
+    }
+
+
+def load_dataset(dataset_paths, dataset_name):
+    x_path = dataset_paths["x_path"]
+    y_path = dataset_paths["y_path"]
+    y_hat_path = dataset_paths["y_hat_path"]
 
     for file_path in (x_path, y_path, y_hat_path):
         if not file_path.exists():
-            raise FileNotFoundError(f"缺少测试文件: {file_path}")
+            raise FileNotFoundError(f"缺少 {dataset_name} 文件: {file_path}")
 
-    test_x = pd.read_csv(x_path).sort_values("Ref_ID").reset_index(drop=True)
-    test_y = pd.read_csv(y_path).sort_values("Ref_ID").reset_index(drop=True)
-    test_y_hat = pd.read_csv(y_hat_path).sort_values("Ref_ID").reset_index(drop=True)
+    data_x = pd.read_csv(x_path).sort_values("Ref_ID").reset_index(drop=True)
+    data_y = pd.read_csv(y_path).sort_values("Ref_ID").reset_index(drop=True)
+    data_y_hat = pd.read_csv(y_hat_path).sort_values("Ref_ID").reset_index(drop=True)
 
     if not (
-        test_x["Ref_ID"].equals(test_y["Ref_ID"])
-        and test_y["Ref_ID"].equals(test_y_hat["Ref_ID"])
+        data_x["Ref_ID"].equals(data_y["Ref_ID"])
+        and data_y["Ref_ID"].equals(data_y_hat["Ref_ID"])
     ):
-        raise ValueError("test_x/test_y/test_y_hat 的 Ref_ID 未完全对齐。")
+        raise ValueError(
+            f"{dataset_name}_x/{dataset_name}_y/{dataset_name}_y_hat 的 Ref_ID 未完全对齐。"
+        )
 
-    return test_x, test_y, test_y_hat
+    return data_x, data_y, data_y_hat
 
 
 def build_true_delta(test_y, test_y_hat):
@@ -56,9 +86,9 @@ def build_true_delta(test_y, test_y_hat):
     return delta_true
 
 
-def evaluate_predictions(delta_true, delta_pred):
+def evaluate_predictions(delta_true, delta_pred, dataset_name):
     rows = []
-    print("\n测试集 delta_y 评估结果:")
+    print(f"\n{dataset_name} 集 delta_y 评估结果:")
     for col in delta_true.columns:
         valid_mask = ~(delta_true[col].isna() | delta_pred[col].isna())
         y_true_col = delta_true.loc[valid_mask, col]
@@ -86,7 +116,32 @@ def evaluate_predictions(delta_true, delta_pred):
     return pd.DataFrame(rows)
 
 
+def safe_save_csv(df, output_path):
+    """
+    尝试保存 CSV；若目标文件被占用（常见于 Excel 打开）导致 PermissionError，
+    自动改名为时间戳文件并继续保存，避免脚本直接崩溃。
+    """
+    try:
+        df.to_csv(output_path, index=False, encoding="utf-8-sig")
+        return output_path
+    except PermissionError:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fallback_path = output_path.with_name(
+            f"{output_path.stem}_{timestamp}{output_path.suffix}"
+        )
+        df.to_csv(fallback_path, index=False, encoding="utf-8-sig")
+        print(
+            f"⚠️ 无法写入 {output_path}（可能正被其它程序占用），"
+            f"已改为保存到: {fallback_path}"
+        )
+        return fallback_path
+
+
 def main():
+    args = parse_args()
+    dataset = args.dataset
+    dataset_paths = resolve_dataset_paths(dataset)
+
     if not MODEL_PATH.exists():
         raise FileNotFoundError(
             f"找不到训练好的模型: {MODEL_PATH}。请先运行 scripts/train 生成模型。"
@@ -95,29 +150,32 @@ def main():
     print(f"加载模型: {MODEL_PATH}")
     model = joblib.load(MODEL_PATH)
 
-    test_x, test_y, test_y_hat = load_test_data()
-    x_features = test_x.drop(columns=["Ref_ID"]).copy()
-    delta_true = build_true_delta(test_y, test_y_hat)
+    print(f"正在评估数据集: {dataset}")
+    data_x, data_y, data_y_hat = load_dataset(dataset_paths, dataset)
+    x_features = data_x.drop(columns=["Ref_ID"]).copy()
+    delta_true = build_true_delta(data_y, data_y_hat)
 
     delta_pred_array = model.predict(x_features)
     delta_pred = pd.DataFrame(
         delta_pred_array, columns=delta_true.columns, index=delta_true.index
     )
 
-    metrics_df = evaluate_predictions(delta_true, delta_pred)
+    metrics_df = evaluate_predictions(delta_true, delta_pred, dataset)
 
-    result_df = pd.DataFrame({"Ref_ID": test_x["Ref_ID"]})
+    result_df = pd.DataFrame({"Ref_ID": data_x["Ref_ID"]})
     for col in delta_true.columns:
         result_df[f"{col}_true"] = delta_true[col]
         result_df[f"{col}_pred"] = delta_pred[col]
         result_df[f"{col}_error"] = delta_pred[col] - delta_true[col]
 
-    PREDICTION_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    result_df.to_csv(PREDICTION_OUTPUT, index=False, encoding="utf-8-sig")
-    metrics_df.to_csv(METRIC_OUTPUT, index=False, encoding="utf-8-sig")
+    prediction_output = dataset_paths["prediction_output"]
+    metric_output = dataset_paths["metric_output"]
+    prediction_output.parent.mkdir(parents=True, exist_ok=True)
+    saved_prediction_path = safe_save_csv(result_df, prediction_output)
+    saved_metric_path = safe_save_csv(metrics_df, metric_output)
 
-    print(f"\n已保存逐样本对比结果: {PREDICTION_OUTPUT}")
-    print(f"已保存指标汇总结果: {METRIC_OUTPUT}")
+    print(f"\n已保存逐样本对比结果: {saved_prediction_path}")
+    print(f"已保存指标汇总结果: {saved_metric_path}")
 
 
 if __name__ == "__main__":
