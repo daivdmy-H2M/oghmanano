@@ -207,6 +207,8 @@ python .\scripts\train
 .\.venv\Scripts\python.exe .\scripts\plot_validate --dataset both
 ```
 
+> `--dataset both` 会先自动执行一次 `validate --dataset both` 刷新预测结果，再生成对比图，避免 `bin/compare/figures` 使用旧数据不更新。
+
 图像输出到：
 - `bin/compare/figures/delta_Voc_train_test_compare.png`
 - `bin/compare/figures/delta_Jsc_train_test_compare.png`

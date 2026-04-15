@@ -1,6 +1,8 @@
 from pathlib import Path
 import argparse
 import importlib.util
+from datetime import datetime
+import subprocess
 import sys
 
 import numpy as np
@@ -21,6 +23,11 @@ def parse_args():
         choices=["train", "test", "both"],
         default="test",
         help="train/test 绘制单数据集分析图；both 绘制 train/test 对比散点图。",
+    )
+    parser.add_argument(
+        "--refresh-predictions",
+        action="store_true",
+        help="绘图前先自动执行 validate（默认在 both 模式下会自动刷新）。",
     )
     return parser.parse_args()
 
@@ -47,6 +54,30 @@ def discover_targets(columns):
         if col.endswith("_true"):
             targets.append(col[: -len("_true")])
     return targets
+
+
+def save_figure_safe(plt, output_path):
+    try:
+        plt.savefig(output_path, bbox_inches="tight")
+        return output_path
+    except PermissionError:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fallback_path = output_path.with_name(
+            f"{output_path.stem}_{timestamp}{output_path.suffix}"
+        )
+        plt.savefig(fallback_path, bbox_inches="tight")
+        print(
+            f"⚠️ 图像文件被占用，无法覆盖 {output_path}，"
+            f"已保存到新文件: {fallback_path}"
+        )
+        return fallback_path
+
+
+def refresh_predictions(dataset):
+    validate_script = SCRIPT_PATH.parent / "validate"
+    cmd = [sys.executable, str(validate_script), "--dataset", dataset]
+    print(f"先刷新预测结果: {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
 
 
 def plot_for_target(df, target, output_dir, plt):
@@ -94,9 +125,9 @@ def plot_for_target(df, target, output_dir, plt):
 
     plt.tight_layout()
     output_path = output_dir / f"{target}_analysis.png"
-    plt.savefig(output_path, bbox_inches="tight")
+    saved_path = save_figure_safe(plt, output_path)
     plt.close()
-    print(f"✅ 已保存图像: {output_path}")
+    print(f"✅ 已保存图像: {saved_path}")
 
 
 def plot_train_test_comparison(train_df, test_df, target, output_dir, plt):
@@ -166,14 +197,15 @@ def plot_train_test_comparison(train_df, test_df, target, output_dir, plt):
     plt.tight_layout()
 
     output_path = output_dir / f"{target}_train_test_compare.png"
-    plt.savefig(output_path, bbox_inches="tight")
+    saved_path = save_figure_safe(plt, output_path)
     plt.close()
-    print(f"✅ 已保存图像: {output_path}")
+    print(f"✅ 已保存图像: {saved_path}")
 
 
 def main():
     args = parse_args()
     dataset = args.dataset
+    should_refresh = args.refresh_predictions or dataset == "both"
     paths = resolve_paths(dataset)
     figure_dir = paths["figure_dir"]
 
@@ -186,6 +218,10 @@ def main():
     import matplotlib.pyplot as plt
 
     figure_dir.mkdir(parents=True, exist_ok=True)
+    if should_refresh:
+        refresh_target = "both" if dataset == "both" else dataset
+        refresh_predictions(refresh_target)
+
     if dataset == "both":
         train_pred_path = paths["train_pred_path"]
         test_pred_path = paths["test_pred_path"]
