@@ -50,7 +50,6 @@ main 5 ：
     Ref_ID
     Simulation_Voc
     Simulation_Jsc
-    JV_default_Voc 
     Simulation_PCE
     Simulation_FF
 2.analyses_y_hat：
@@ -59,6 +58,27 @@ main 5 ：
     JV_default_Jsc
     JV_default_PCE
     JV_default_FF
+
+> 说明：`analyses_y.csv` 中不再保留 `JV_default_Voc`，避免该字段进入真实值侧造成数据污染。
+
+## 训练/测试集重新规整与切分（随机四分法：3/4 train, 1/4 test）
+
+在 `analyses_x.csv`、`analyses_y.csv`、`analyses_y_hat.csv` 生成后，执行：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\split_train_test
+```
+
+脚本会：
+- 自动剔除 `analyses_y.csv` 里的 `JV_default_Voc`（若存在历史残留）。
+- 按 `Ref_ID` 对齐三份数据后，随机切分为 75% 训练集、25% 测试集（`random_state=42`）。
+- 输出到：
+  - `bin/train/train_x.csv`
+  - `bin/train/train_y.csv`
+  - `bin/train/train_y_hat.csv`
+  - `bin/test/test_x.csv`
+  - `bin/test/test_y.csv`
+  - `bin/test/test_y_hat.csv`
 
 
 main 6 ：
