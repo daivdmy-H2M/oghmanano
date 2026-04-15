@@ -1,0 +1,84 @@
+from pathlib import Path
+
+import pandas as pd
+from sklearn.model_selection import train_test_split
+
+SCRIPT_PATH = Path(__file__).resolve()
+PROJECT_ROOT = SCRIPT_PATH.parent.parent
+ANALYSES_DIR = PROJECT_ROOT / "bin" / "analyses1"
+TRAIN_DIR = PROJECT_ROOT / "bin" / "train"
+TEST_DIR = PROJECT_ROOT / "bin" / "test"
+
+RANDOM_STATE = 42
+TEST_SIZE = 0.25
+
+
+def load_aligned_inputs():
+    x_path = ANALYSES_DIR / "analyses_x.csv"
+    y_path = ANALYSES_DIR / "analyses_y.csv"
+    y_hat_path = ANALYSES_DIR / "analyses_y_hat.csv"
+
+    for file_path in (x_path, y_path, y_hat_path):
+        if not file_path.exists():
+            raise FileNotFoundError(f"缺少输入文件: {file_path}")
+
+    df_x = pd.read_csv(x_path).sort_values("Ref_ID").reset_index(drop=True)
+    df_y = pd.read_csv(y_path).sort_values("Ref_ID").reset_index(drop=True)
+    df_y_hat = pd.read_csv(y_hat_path).sort_values("Ref_ID").reset_index(drop=True)
+
+    # 关键要求：剔除 analyses_y.csv 中的 JV_default_Voc，避免污染
+    if "JV_default_Voc" in df_y.columns:
+        df_y = df_y.drop(columns=["JV_default_Voc"])
+        print("已从 analyses_y 中剔除列: JV_default_Voc")
+
+    if not (
+        df_x["Ref_ID"].equals(df_y["Ref_ID"])
+        and df_y["Ref_ID"].equals(df_y_hat["Ref_ID"])
+    ):
+        raise ValueError("analyses_x / analyses_y / analyses_y_hat 的 Ref_ID 未完全对齐。")
+
+    return df_x, df_y, df_y_hat
+
+
+def split_and_save(df_x, df_y, df_y_hat):
+    ref_ids = df_x["Ref_ID"]
+    train_ids, test_ids = train_test_split(
+        ref_ids, test_size=TEST_SIZE, random_state=RANDOM_STATE, shuffle=True
+    )
+    train_id_set = set(train_ids.tolist())
+
+    train_mask = df_x["Ref_ID"].isin(train_id_set)
+    test_mask = ~train_mask
+
+    train_x = df_x.loc[train_mask].sort_values("Ref_ID").reset_index(drop=True)
+    train_y = df_y.loc[train_mask].sort_values("Ref_ID").reset_index(drop=True)
+    train_y_hat = df_y_hat.loc[train_mask].sort_values("Ref_ID").reset_index(drop=True)
+
+    test_x = df_x.loc[test_mask].sort_values("Ref_ID").reset_index(drop=True)
+    test_y = df_y.loc[test_mask].sort_values("Ref_ID").reset_index(drop=True)
+    test_y_hat = df_y_hat.loc[test_mask].sort_values("Ref_ID").reset_index(drop=True)
+
+    TRAIN_DIR.mkdir(parents=True, exist_ok=True)
+    TEST_DIR.mkdir(parents=True, exist_ok=True)
+
+    train_x.to_csv(TRAIN_DIR / "train_x.csv", index=False, encoding="utf-8-sig")
+    train_y.to_csv(TRAIN_DIR / "train_y.csv", index=False, encoding="utf-8-sig")
+    train_y_hat.to_csv(TRAIN_DIR / "train_y_hat.csv", index=False, encoding="utf-8-sig")
+
+    test_x.to_csv(TEST_DIR / "test_x.csv", index=False, encoding="utf-8-sig")
+    test_y.to_csv(TEST_DIR / "test_y.csv", index=False, encoding="utf-8-sig")
+    test_y_hat.to_csv(TEST_DIR / "test_y_hat.csv", index=False, encoding="utf-8-sig")
+
+    print("数据集切分完成（随机 3:1）:")
+    print(f"  train: {len(train_x)} 条")
+    print(f"  test : {len(test_x)} 条")
+    print(f"  输出目录: {TRAIN_DIR} 和 {TEST_DIR}")
+
+
+def main():
+    df_x, df_y, df_y_hat = load_aligned_inputs()
+    split_and_save(df_x, df_y, df_y_hat)
+
+
+if __name__ == "__main__":
+    main()

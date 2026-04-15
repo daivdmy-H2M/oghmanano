@@ -50,7 +50,6 @@ main 5 ：
     Ref_ID
     Simulation_Voc
     Simulation_Jsc
-    JV_default_Voc 
     Simulation_PCE
     Simulation_FF
 2.analyses_y_hat：
@@ -59,6 +58,27 @@ main 5 ：
     JV_default_Jsc
     JV_default_PCE
     JV_default_FF
+
+> 说明：`analyses_y.csv` 中不再保留 `JV_default_Voc`，避免该字段进入真实值侧造成数据污染。
+
+## 训练/测试集重新规整与切分（随机四分法：3/4 train, 1/4 test）
+
+在 `analyses_x.csv`、`analyses_y.csv`、`analyses_y_hat.csv` 生成后，执行：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\split_train_test
+```
+
+脚本会：
+- 自动剔除 `analyses_y.csv` 里的 `JV_default_Voc`（若存在历史残留）。
+- 按 `Ref_ID` 对齐三份数据后，随机切分为 75% 训练集、25% 测试集（`random_state=42`）。
+- 输出到：
+  - `bin/train/train_x.csv`
+  - `bin/train/train_y.csv`
+  - `bin/train/train_y_hat.csv`
+  - `bin/test/test_x.csv`
+  - `bin/test/test_y.csv`
+  - `bin/test/test_y_hat.csv`
 
 
 main 6 ：
@@ -131,6 +151,27 @@ python .\scripts\train
 - `bin/test/test_delta_y_predictions.csv`（每条样本的 true/pred/error）
 - `bin/test/test_delta_y_metrics.csv`（MAE/MSE/RMSE/R2 汇总）
 
+## train 集模拟与真实值对比（复用训练数据做一次验证）
+
+如果希望在训练数据上也跑一次模型预测，并查看与真实值偏差，可运行：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\validate --dataset train
+```
+
+输出文件：
+- `bin/train/train_delta_y_predictions.csv`（每条样本的 true/pred/error）
+- `bin/train/train_delta_y_metrics.csv`（MAE/MSE/RMSE/R2 汇总）
+
+如果希望**一次性同时跑 train + test，并对比两边指标判断是否可能过拟合**，可运行：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\validate --dataset both
+```
+
+会额外输出：
+- `bin/overfit_comparison.csv`（train/test 指标并排 + gap 差值）
+
 ## 自动画图脚本（真实 vs 预测散点图 + 误差分布图）
 
 当 `bin/test/test_delta_y_predictions.csv` 已生成后，可运行：
@@ -145,3 +186,29 @@ python .\scripts\train
 - `bin/test/figures/delta_Jsc_analysis.png`
 - `bin/test/figures/delta_PCE_analysis.png`
 - `bin/test/figures/delta_FF_analysis.png`
+
+若要对 train 集输出回归图（含拟合线）与误差分布图：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\plot_validate --dataset train
+```
+
+图像输出到：
+- `bin/train/figures/delta_Voc_analysis.png`
+- `bin/train/figures/delta_Jsc_analysis.png`
+- `bin/train/figures/delta_PCE_analysis.png`
+- `bin/train/figures/delta_FF_analysis.png`
+
+如果希望画出 **train 与 test 在同一张 Actual vs Predicted 散点图上的分散对比**（蓝色圆圈 train，红色方框 test）：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\plot_validate --dataset both
+```
+
+图像输出到：
+- `bin/compare/figures/delta_Voc_train_test_compare.png`
+- `bin/compare/figures/delta_Jsc_train_test_compare.png`
+- `bin/compare/figures/delta_PCE_train_test_compare.png`
+- `bin/compare/figures/delta_FF_train_test_compare.png`
+
+> 若运行 `validate` 时提示 `PermissionError: ... denied`，通常是目标 CSV 正在被 Excel 占用。关闭该文件后重试即可；脚本也会自动回退为带时间戳的新文件名保存。
