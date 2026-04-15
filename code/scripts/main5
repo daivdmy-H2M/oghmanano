@@ -38,11 +38,10 @@ def split_simulation_data():
         # ==========================================
         # 定义 y 需要的列
         cols_y = [
-            'Ref_ID', 
-            'Simulation_Voc', 
-            'Simulation_Jsc', 
-            'JV_default_Voc', 
-            'Simulation_PCE', 
+            'Ref_ID',
+            'Simulation_Voc',
+            'Simulation_Jsc',
+            'Simulation_PCE',
             'Simulation_FF'
         ]
         
