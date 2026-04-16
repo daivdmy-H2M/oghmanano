@@ -21,8 +21,8 @@ def parse_args():
     parser.add_argument(
         "--dataset",
         choices=["train", "test", "both"],
-        default="test",
-        help="train/test 绘制单数据集分析图；both 绘制 train/test 对比散点图。",
+        default="both",
+        help="train/test 绘制单数据集分析图；both 绘制 train/test 对比散点图（默认）。",
     )
     parser.add_argument(
         "--refresh-predictions",
@@ -157,6 +157,9 @@ def plot_train_test_comparison(train_df, test_df, target, output_dir, plt):
     r2_test = (
         r2_score(test_sub[true_col], test_sub[pred_col]) if len(test_sub) >= 2 else float("nan")
     )
+    r2_all = float("nan")
+    if len(combined) >= 2:
+        r2_all = r2_score(combined[true_col], combined[pred_col])
 
     plt.figure(figsize=(6, 6), dpi=140)
     ax = plt.gca()
@@ -191,7 +194,10 @@ def plot_train_test_comparison(train_df, test_df, target, output_dir, plt):
     ax.set_ylim(min_val - padding, max_val + padding)
     ax.set_xlabel("Actual Values")
     ax.set_ylabel("Predicted Values")
-    ax.set_title(f"{target} - Train vs Test")
+    if pd.notna(r2_all):
+        ax.set_title(f"{target} - Train vs Test (R²={r2_all:.4f})")
+    else:
+        ax.set_title(f"{target} - Train vs Test")
     ax.legend(loc="upper left")
     ax.grid(alpha=0.2)
     plt.tight_layout()
