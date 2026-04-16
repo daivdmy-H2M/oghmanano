@@ -1,0 +1,275 @@
+import json
+import math
+import os
+import shutil
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+SCRIPT_PATH = Path(__file__).resolve()
+PROJECT_ROOT = SCRIPT_PATH.parent.parent
+
+CSV_PATH = PROJECT_ROOT / "data" / "Perovskite_database_content_all_data.csv"
+BASE_SIM_JSON = PROJECT_ROOT / "configs" / "sim.json"
+BIN_OUTPUT_DIR = PROJECT_ROOT / "bin" / "tio2-c_2.0"
+RUN_OUTPUT_DIR = Path(r"C:\Users\刘惠雅\Desktop\VScode\tio2-c2.0")
+
+OGHMA_ENGINE_PATH = r'"C:\Program Files (x86)\OghmaNano\oghma_core.exe"'
+
+FILTER_RULES = {
+    "Substrate_stack_sequence": "SLG | FTO",
+    "ETL_stack_sequence": "TiO2-c",
+    "Perovskite_composition_long_form": "MAPbI3",
+    "HTL_stack_sequence": "Spiro-MeOTAD",
+    "Backcontact_stack_sequence": "Au",
+}
+
+
+def is_valid_data(value):
+    if pd.isna(value):
+        return False
+    val_str = str(value).strip().lower()
+    return val_str not in {"", "nan", "none"}
+
+
+def parse_float(value):
+    if not is_valid_data(value):
+        return None
+    try:
+        return float(str(value).strip())
+    except ValueError:
+        return None
+
+
+def parse_pipe_second(value):
+    """从 `a|b` 取 b；若不存在或无效返回 None。"""
+    if not is_valid_data(value):
+        return None
+    parts = [p.strip() for p in str(value).split("|")]
+    if len(parts) < 2:
+        return None
+    second = parts[1]
+    if second.lower() in {"", "nan", "none"}:
+        return None
+    try:
+        return float(second)
+    except ValueError:
+        return None
+
+
+def build_x_row(row):
+    ref_id = row.get("Ref_ID")
+
+    cell_area = parse_float(row.get("Cell_area_measured"))
+    if cell_area is None:
+        cell_area = 0.06
+
+    substrate_thickness = parse_pipe_second(row.get("Substrate_thickness"))
+    if substrate_thickness is None:
+        substrate_thickness = 50.0
+
+    etl_thickness = parse_float(row.get("ETL_thickness"))
+    if etl_thickness is None:
+        etl_thickness = 200.0
+
+    perovskite_thickness = parse_float(row.get("Perovskite_thickness"))
+    if perovskite_thickness is None:
+        perovskite_thickness = 400.0
+
+    htl_thickness = parse_float(row.get("HTL_thickness_list"))
+    if htl_thickness is None:
+        htl_thickness = 200.0
+
+    backcontact_thickness = parse_float(row.get("Backcontact_thickness_list"))
+    if backcontact_thickness is None:
+        backcontact_thickness = 100.0
+
+    return {
+        "Ref_ID": ref_id,
+        "Cell_area": cell_area,
+        "Layer_1": "Substrate",
+        "Layer_1_material": "FTO",
+        "Substrate_thickness": substrate_thickness,
+        "Layer_2": "ETL",
+        "Layer_2_material": "TiO2-c",
+        "ETL_thickness": etl_thickness,
+        "Layer_3": "Perovskite",
+        "Layer_3_material": "MAPbI3",
+        "Perovskite_thickness": perovskite_thickness,
+        "Layer_4": "HTL",
+        "Layer_4_material": "Spiro-MeOTAD",
+        "HTL_thickness": htl_thickness,
+        "Layer_5": "Backcontact",
+        "Layer_5_material": "Au",
+        "Backcontact_thickness": backcontact_thickness,
+        "Perovskite_band_gap": row.get("Perovskite_band_gap", np.nan),
+    }
+
+
+def update_sim_json(sim_data, row):
+    """按需求更新 sim.json。只在有有效数据时覆盖；空/NaN 不改动。"""
+    if "sim" in sim_data:
+        sim_data["sim"]["use_json_local_root"] = "false"
+
+    # A. Substrate_thickness: 数据格式 SLG|FTO，忽略 SLG，提取 FTO (um -> nm)
+    sub_fto_um = parse_pipe_second(row.get("Substrate_thickness"))
+    if sub_fto_um is not None:
+        sim_data["epitaxy"]["segment0"]["dy"] = sub_fto_um * 1000.0
+
+    # B. ETL_thickness: nm -> nm
+    etl_nm = parse_float(row.get("ETL_thickness"))
+    if etl_nm is not None:
+        sim_data["epitaxy"]["segment1"]["dy"] = etl_nm
+
+    # C. Perovskite_thickness: nm -> nm
+    pero_nm = parse_float(row.get("Perovskite_thickness"))
+    if pero_nm is not None:
+        sim_data["epitaxy"]["segment2"]["dy"] = pero_nm
+
+    # D. HTL_thickness_list: nm -> nm
+    htl_nm = parse_float(row.get("HTL_thickness_list"))
+    if htl_nm is not None:
+        sim_data["epitaxy"]["segment3"]["dy"] = htl_nm
+
+    # E. Backcontact_thickness_list: nm -> nm
+    bc_nm = parse_float(row.get("Backcontact_thickness_list"))
+    if bc_nm is not None:
+        sim_data["epitaxy"]["segment4"]["dy"] = bc_nm
+
+    # F. Cell_area_measured: cm2 -> sqrt -> m，写入 x/z 边长
+    area_cm2 = parse_float(row.get("Cell_area_measured"))
+    if area_cm2 is not None and area_cm2 > 0:
+        side_length_m = math.sqrt(area_cm2) / 100.0
+        sim_data["world"]["world_data"]["dx"] = side_length_m
+        sim_data["world"]["world_data"]["dz"] = side_length_m
+        for i in range(5):
+            seg = sim_data["epitaxy"].get(f"segment{i}")
+            if seg:
+                seg["dx"] = side_length_m
+                seg["dz"] = side_length_m
+
+    # G. Perovskite_band_gap -> segment2.shape_dos.Eg
+    band_gap = parse_float(row.get("Perovskite_band_gap"))
+    if band_gap is not None:
+        if "shape_dos" in sim_data["epitaxy"]["segment2"]:
+            sim_data["epitaxy"]["segment2"]["shape_dos"]["Eg"] = str(band_gap)
+
+    return sim_data
+
+
+def run_simulation_for_row(row):
+    ref_id = str(row.get("Ref_ID"))
+    run_dir = RUN_OUTPUT_DIR / f"ref{ref_id}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    dst_sim = run_dir / "sim.json"
+    shutil.copyfile(BASE_SIM_JSON, dst_sim)
+
+    with open(dst_sim, "r", encoding="utf-8") as f:
+        sim_data = json.load(f)
+
+    sim_data = update_sim_json(sim_data, row)
+
+    with open(dst_sim, "w", encoding="utf-8") as f:
+        json.dump(sim_data, f, indent="\t", sort_keys=False)
+
+    cwd_backup = Path.cwd()
+    try:
+        os.chdir(run_dir)
+        os.system(OGHMA_ENGINE_PATH)
+    finally:
+        os.chdir(cwd_backup)
+
+    sim_info_path = run_dir / "sim_info.dat"
+    sim_result = {
+        "Simulation_Voc": np.nan,
+        "Simulation_Jsc": np.nan,
+        "Simulation_PCE": np.nan,
+        "Simulation_FF": np.nan,
+    }
+
+    if sim_info_path.exists():
+        try:
+            with open(sim_info_path, "r", encoding="utf-8") as f:
+                info = json.load(f)
+            sim_result["Simulation_Voc"] = info.get("voc", np.nan)
+            sim_result["Simulation_Jsc"] = info.get("jsc", np.nan)
+            sim_result["Simulation_PCE"] = info.get("pce", info.get("efficiency", np.nan))
+            sim_result["Simulation_FF"] = info.get("ff", info.get("fill_factor", np.nan))
+        except json.JSONDecodeError:
+            pass
+
+    return ref_id, sim_result
+
+
+def main():
+    if not CSV_PATH.exists():
+        raise FileNotFoundError(f"未找到原始数据文件: {CSV_PATH}")
+    if not BASE_SIM_JSON.exists():
+        raise FileNotFoundError(f"未找到基础配置文件: {BASE_SIM_JSON}")
+
+    BIN_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    RUN_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    print("正在读取原始数据...")
+    df = pd.read_csv(CSV_PATH, low_memory=False)
+
+    for col, expected in FILTER_RULES.items():
+        df = df[df[col] == expected]
+
+    print(f"过滤后样本数量: {len(df)}")
+
+    x_rows = []
+    y_rows = []
+    y_hat_rows = []
+
+    for _, row in df.iterrows():
+        ref_id, sim_result = run_simulation_for_row(row)
+
+        x_rows.append(build_x_row(row))
+
+        y_rows.append(
+            {
+                "Ref_ID": ref_id,
+                "Simulation_Voc": sim_result["Simulation_Voc"],
+                "Simulation_Jsc": sim_result["Simulation_Jsc"],
+                "JV_default_Voc": row.get("JV_default_Voc", np.nan),
+                "Simulation_PCE": sim_result["Simulation_PCE"],
+                "Simulation_FF": sim_result["Simulation_FF"],
+            }
+        )
+
+        y_hat_rows.append(
+            {
+                "Ref_ID": ref_id,
+                "JV_default_Voc": row.get("JV_default_Voc", np.nan),
+                "JV_default_Jsc": row.get("JV_default_Jsc", np.nan),
+                "JV_default_PCE": row.get("JV_default_PCE", np.nan),
+                "JV_default_FF": row.get("JV_default_FF", np.nan),
+            }
+        )
+
+        print(f"Ref_ID={ref_id} 完成")
+
+    x_df = pd.DataFrame(x_rows)
+    y_df = pd.DataFrame(y_rows)
+    y_hat_df = pd.DataFrame(y_hat_rows)
+
+    x_path = BIN_OUTPUT_DIR / "tio2-c2.0_x.csv"
+    y_path = BIN_OUTPUT_DIR / "tio2-c2.0_y.csv"
+    y_hat_path = BIN_OUTPUT_DIR / "tio2-c2.0_y_hat.csv"
+
+    x_df.to_csv(x_path, index=False, encoding="utf-8-sig")
+    y_df.to_csv(y_path, index=False, encoding="utf-8-sig")
+    y_hat_df.to_csv(y_hat_path, index=False, encoding="utf-8-sig")
+
+    print("\n全部完成，输出文件：")
+    print(f"  {x_path}")
+    print(f"  {y_path}")
+    print(f"  {y_hat_path}")
+    print(f"仿真结果文件夹：{RUN_OUTPUT_DIR}")
+
+
+if __name__ == "__main__":
+    main()
