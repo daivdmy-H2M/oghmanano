@@ -8,6 +8,8 @@ PROJECT_ROOT = SCRIPT_PATH.parent.parent
 ANALYSES_DIR = PROJECT_ROOT / "bin" / "analyses1"
 TRAIN_DIR = PROJECT_ROOT / "bin" / "train"
 TEST_DIR = PROJECT_ROOT / "bin" / "test"
+CLEANED_DIR = PROJECT_ROOT / "bin" / "cleaned"
+FIGURE_DIR = CLEANED_DIR / "figures"
 
 RANDOM_STATE = 42
 TEST_SIZE = 0.25
