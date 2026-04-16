@@ -283,17 +283,6 @@ def main():
     excluded_ids = collect_ref_ids_to_exclude()
     ff_outlier_ids = collect_ff_outlier_ref_ids(df_x, df_y, df_y_hat)
     excluded_ids = excluded_ids.union(ff_outlier_ids)
-    if excluded_ids:
-        keep_mask = ~df_x["Ref_ID"].astype(str).isin(excluded_ids)
-        cleaned_x = df_x.loc[keep_mask].reset_index(drop=True)
-        cleaned_y = df_y.loc[keep_mask].reset_index(drop=True)
-        cleaned_y_hat = df_y_hat.loc[keep_mask].reset_index(drop=True)
-    else:
-        cleaned_x = df_x.copy()
-        cleaned_y = df_y.copy()
-        cleaned_y_hat = df_y_hat.copy()
-
-    save_cleaned_outputs(cleaned_x, cleaned_y, cleaned_y_hat)
     split_and_save(df_x, df_y, df_y_hat, excluded_ids)
 
 
