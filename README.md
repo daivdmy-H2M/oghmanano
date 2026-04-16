@@ -233,6 +233,8 @@ python .\scripts\train
 
 输出模型：
 - `bin/XGBoost/train/delta_y_model.pkl`
+- `bin/XGBoost/train/feature_importance_report.csv`（按原始特征聚合后的重要性体检报告）
+- `bin/XGBoost/train/dropped_low_importance_features.csv`（被判定为低重要性的特征）
 
 ### 2) 评估 train+test（输出预测数据和指标）
 

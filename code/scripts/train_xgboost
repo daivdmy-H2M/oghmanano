@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import joblib
+import numpy as np
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
@@ -21,6 +22,10 @@ SCRIPT_PATH = Path(__file__).resolve()
 PROJECT_ROOT = SCRIPT_PATH.parent.parent
 SOURCE_TRAIN_DIR = PROJECT_ROOT / "bin" / "train"
 XGB_TRAIN_DIR = PROJECT_ROOT / "bin" / "XGBoost" / "train"
+FEATURE_IMPORTANCE_PATH = XGB_TRAIN_DIR / "feature_importance_report.csv"
+LOW_IMPORTANCE_FEATURE_PATH = XGB_TRAIN_DIR / "dropped_low_importance_features.csv"
+FINE_IMPORTANCE_PATH = XGB_TRAIN_DIR / "feature_importance_transformed.csv"
+MIN_FEATURE_IMPORTANCE = 1e-4
 
 TARGET_MAP = [
     ("Simulation_Voc", "JV_default_Voc", "delta_Voc"),
@@ -79,11 +84,12 @@ def build_xy(df_x, df_y, df_y_hat):
     return x, delta_y
 
 
-def build_model(x_sample):
-    categorical_cols = x_sample.select_dtypes(
-        include=["object", "category", "string"]
-    ).columns
-    numeric_cols = x_sample.select_dtypes(include=["number"]).columns
+def build_model(feature_columns, categorical_cols, numeric_cols):
+    categorical_cols = [col for col in categorical_cols if col in feature_columns]
+    numeric_cols = [col for col in numeric_cols if col in feature_columns]
+
+    if not categorical_cols and not numeric_cols:
+        raise ValueError("没有可用于建模的特征列。")
 
     preprocessor = ColumnTransformer(
         transformers=[
@@ -130,21 +136,111 @@ def build_model(x_sample):
     )
 
 
+def aggregate_feature_importance(model, input_df, categorical_cols):
+    preprocessor = model.named_steps["preprocessor"]
+    regressor = model.named_steps["regressor"]
+
+    transformed_feature_names = preprocessor.get_feature_names_out()
+    estimator_importances = [est.feature_importances_ for est in regressor.estimators_]
+    mean_importance = np.mean(np.vstack(estimator_importances), axis=0)
+
+    fine_df = pd.DataFrame(
+        {
+            "transformed_feature": transformed_feature_names,
+            "importance": mean_importance,
+        }
+    ).sort_values("importance", ascending=False)
+
+    grouped_importance = {}
+    for transformed_name, importance in zip(transformed_feature_names, mean_importance):
+        if transformed_name.startswith("num__"):
+            raw_feature = transformed_name.replace("num__", "", 1)
+        elif transformed_name.startswith("cat__"):
+            cat_body = transformed_name.replace("cat__", "", 1)
+            raw_feature = cat_body
+            for cat_col in sorted(categorical_cols, key=len, reverse=True):
+                prefix = f"{cat_col}_"
+                if cat_body == cat_col or cat_body.startswith(prefix):
+                    raw_feature = cat_col
+                    break
+        else:
+            raw_feature = transformed_name
+
+        grouped_importance[raw_feature] = grouped_importance.get(raw_feature, 0.0) + float(
+            importance
+        )
+
+    grouped_df = pd.DataFrame(
+        [{"feature": key, "importance": val} for key, val in grouped_importance.items()]
+    ).sort_values("importance", ascending=False)
+
+    grouped_df["is_low_importance"] = grouped_df["importance"] <= MIN_FEATURE_IMPORTANCE
+    grouped_df["exists_in_training_x"] = grouped_df["feature"].isin(input_df.columns)
+    return fine_df, grouped_df
+
+
+def select_features_by_importance(grouped_df, x_columns):
+    grouped_df = grouped_df[grouped_df["exists_in_training_x"]]
+    keep_df = grouped_df[grouped_df["importance"] > MIN_FEATURE_IMPORTANCE]
+    keep_features = keep_df["feature"].tolist()
+
+    if not keep_features:
+        top_n = min(10, len(grouped_df))
+        keep_features = grouped_df.head(top_n)["feature"].tolist()
+
+    keep_set = set(keep_features)
+    ordered_keep_features = [col for col in x_columns if col in keep_set]
+    dropped_features = [col for col in x_columns if col not in keep_set]
+    return ordered_keep_features, dropped_features
+
+
 def main():
     print(f"XGBoost 训练数据目录(输入): {SOURCE_TRAIN_DIR}")
     print(f"XGBoost 输出目录: {XGB_TRAIN_DIR}")
 
     df_x, df_y, df_y_hat = load_train_dataset()
     x, delta_y = build_xy(df_x, df_y, df_y_hat)
+    categorical_cols = x.select_dtypes(include=["object", "category", "string"]).columns.tolist()
+    numeric_cols = x.select_dtypes(include=["number"]).columns.tolist()
 
     x_train, x_valid, y_train, y_valid = train_test_split(
         x, delta_y, test_size=0.2, random_state=42
     )
 
-    model = build_model(x_train)
-    model.fit(x_train, y_train)
+    # 第 1 阶段：全特征训练，提取重要性体检报告
+    stage1_model = build_model(x.columns.tolist(), categorical_cols, numeric_cols)
+    stage1_model.fit(x_train, y_train)
 
-    y_pred = model.predict(x_valid)
+    fine_importance_df, grouped_importance_df = aggregate_feature_importance(
+        stage1_model, x, categorical_cols
+    )
+    selected_features, dropped_features = select_features_by_importance(
+        grouped_importance_df, x.columns.tolist()
+    )
+
+    print(
+        f"特征重要性阈值: {MIN_FEATURE_IMPORTANCE}，"
+        f"保留特征 {len(selected_features)} 个，剔除低重要性特征 {len(dropped_features)} 个。"
+    )
+
+    XGB_TRAIN_DIR.mkdir(parents=True, exist_ok=True)
+    grouped_importance_df.to_csv(FEATURE_IMPORTANCE_PATH, index=False, encoding="utf-8-sig")
+    pd.DataFrame({"dropped_feature": dropped_features}).to_csv(
+        LOW_IMPORTANCE_FEATURE_PATH, index=False, encoding="utf-8-sig"
+    )
+    fine_importance_df.to_csv(FINE_IMPORTANCE_PATH, index=False, encoding="utf-8-sig")
+
+    if dropped_features:
+        print("已剔除低重要性特征:")
+        print(", ".join(dropped_features))
+    else:
+        print("未发现低重要性特征（或阈值下全部保留）。")
+
+    # 第 2 阶段：仅保留重要特征训练最终模型
+    final_model = build_model(selected_features, categorical_cols, numeric_cols)
+    final_model.fit(x_train, y_train)
+
+    y_pred = final_model.predict(x_valid)
     y_pred_df = pd.DataFrame(y_pred, columns=y_valid.columns, index=y_valid.index)
 
     print("\nXGBoost 验证集指标 (delta_y):")
@@ -153,10 +249,11 @@ def main():
         r2 = r2_score(y_valid[col], y_pred_df[col])
         print(f"{col}: MSE={mse:.6f}, R2={r2:.6f}")
 
-    XGB_TRAIN_DIR.mkdir(parents=True, exist_ok=True)
     model_path = XGB_TRAIN_DIR / "delta_y_model.pkl"
-    joblib.dump(model, model_path)
+    joblib.dump(final_model, model_path)
     print(f"\nXGBoost 模型已保存: {model_path}")
+    print(f"特征重要性报告: {FEATURE_IMPORTANCE_PATH}")
+    print(f"低重要性特征清单: {LOW_IMPORTANCE_FEATURE_PATH}")
 
 
 if __name__ == "__main__":
