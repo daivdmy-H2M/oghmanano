@@ -236,6 +236,8 @@ python .\scripts\train
 - `bin/XGBoost/train/feature_importance_report.csv`（按原始特征聚合后的重要性体检报告）
 - `bin/XGBoost/train/dropped_low_importance_features.csv`（被判定为低重要性的特征）
 
+> 注意：`python -m compileall ...` 只做语法检查，不会执行训练，也不会生成输出文件。
+
 ### 2) 评估 train+test（输出预测数据和指标）
 
 ```powershell
@@ -260,3 +262,14 @@ python .\scripts\train
 - `bin/XGBoost/compare/figures/delta_Jsc_train_test_compare.png`
 - `bin/XGBoost/compare/figures/delta_PCE_train_test_compare.png`
 - `bin/XGBoost/compare/figures/delta_FF_train_test_compare.png`
+
+### 一键执行全流程（推荐）
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_xgboost_pipeline
+```
+
+该命令会自动按顺序执行：
+1. `train_xgboost`
+2. `validate_xgboost --dataset both`
+3. `plot_validate_xgboost --dataset both`
