@@ -216,3 +216,60 @@ python .\scripts\train
 - `bin/compare/figures/delta_FF_train_test_compare.png`
 
 > 若运行 `validate` 时提示 `PermissionError: ... denied`，通常是目标 CSV 正在被 Excel 占用。关闭该文件后重试即可；脚本也会自动回退为带时间戳的新文件名保存。
+
+## XGBoost 模型流程（不改变原始 train/test 数据来源）
+
+以下脚本会继续读取：
+- `bin/train/train_x.csv`, `train_y.csv`, `train_y_hat.csv`
+- `bin/test/test_x.csv`, `test_y.csv`, `test_y_hat.csv`
+
+但所有输出会写到新的目录 `bin/XGBoost/`，不会覆盖原有结果。
+
+### 1) 训练 XGBoost
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\train_xgboost
+```
+
+输出模型：
+- `bin/XGBoost/train/delta_y_model.pkl`
+- `bin/XGBoost/train/feature_importance_report.csv`（按原始特征聚合后的重要性体检报告）
+- `bin/XGBoost/train/dropped_low_importance_features.csv`（被判定为低重要性的特征）
+
+> 注意：`python -m compileall ...` 只做语法检查，不会执行训练，也不会生成输出文件。
+
+### 2) 评估 train+test（输出预测数据和指标）
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\validate_xgboost --dataset both
+```
+
+输出：
+- `bin/XGBoost/train/train_delta_y_predictions.csv`
+- `bin/XGBoost/train/train_delta_y_metrics.csv`
+- `bin/XGBoost/test/test_delta_y_predictions.csv`
+- `bin/XGBoost/test/test_delta_y_metrics.csv`
+- `bin/XGBoost/overfit_comparison.csv`
+
+### 3) 绘制对比图（train vs test，PNG）
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\plot_validate_xgboost --dataset both
+```
+
+输出：
+- `bin/XGBoost/compare/figures/delta_Voc_train_test_compare.png`
+- `bin/XGBoost/compare/figures/delta_Jsc_train_test_compare.png`
+- `bin/XGBoost/compare/figures/delta_PCE_train_test_compare.png`
+- `bin/XGBoost/compare/figures/delta_FF_train_test_compare.png`
+
+### 一键执行全流程（推荐）
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\run_xgboost_pipeline
+```
+
+该命令会自动按顺序执行：
+1. `train_xgboost`
+2. `validate_xgboost --dataset both`
+3. `plot_validate_xgboost --dataset both`

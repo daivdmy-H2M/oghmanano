@@ -1,0 +1,33 @@
+from pathlib import Path
+import subprocess
+import sys
+
+SCRIPT_PATH = Path(__file__).resolve()
+SCRIPTS_DIR = SCRIPT_PATH.parent
+PROJECT_ROOT = SCRIPT_PATH.parent.parent
+XGB_BIN_DIR = PROJECT_ROOT / "bin" / "XGBoost"
+
+
+def run_step(script_name, args=None):
+    args = args or []
+    cmd = [sys.executable, str(SCRIPTS_DIR / script_name), *args]
+    print(f"\n>>> 运行: {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
+
+
+def main():
+    print("开始执行 XGBoost 全流程：train -> validate(both) -> plot(both)")
+    run_step("train_xgboost")
+    run_step("validate_xgboost", ["--dataset", "both"])
+    run_step("plot_validate_xgboost", ["--dataset", "both"])
+
+    print("\nXGBoost 全流程执行完成，输出目录如下：")
+    print(f"  模型: {XGB_BIN_DIR / 'train' / 'delta_y_model.pkl'}")
+    print(f"  训练预测: {XGB_BIN_DIR / 'train' / 'train_delta_y_predictions.csv'}")
+    print(f"  测试预测: {XGB_BIN_DIR / 'test' / 'test_delta_y_predictions.csv'}")
+    print(f"  对比图目录: {XGB_BIN_DIR / 'compare' / 'figures'}")
+    print(f"  特征重要性报告: {XGB_BIN_DIR / 'train' / 'feature_importance_report.csv'}")
+
+
+if __name__ == "__main__":
+    main()
