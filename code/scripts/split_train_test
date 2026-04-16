@@ -8,6 +8,8 @@ PROJECT_ROOT = SCRIPT_PATH.parent.parent
 ANALYSES_DIR = PROJECT_ROOT / "bin" / "analyses1"
 TRAIN_DIR = PROJECT_ROOT / "bin" / "train"
 TEST_DIR = PROJECT_ROOT / "bin" / "test"
+CLEANED_DIR = PROJECT_ROOT / "bin" / "cleaned"
+FIGURE_DIR = CLEANED_DIR / "figures"
 
 RANDOM_STATE = 42
 TEST_SIZE = 0.25
@@ -156,6 +158,34 @@ def split_and_save(df_x, df_y, df_y_hat, excluded_ids):
     print(f"  train: {len(train_x)} 条")
     print(f"  test : {len(test_x)} 条")
     print(f"  输出目录: {TRAIN_DIR} 和 {TEST_DIR}")
+
+
+def invalidate_downstream_artifacts():
+    """切分后清理旧预测/旧图，避免误读未更新结果。"""
+    stale_paths = [
+        PROJECT_ROOT / "bin" / "train" / "train_delta_y_predictions.csv",
+        PROJECT_ROOT / "bin" / "train" / "train_delta_y_metrics.csv",
+        PROJECT_ROOT / "bin" / "test" / "test_delta_y_predictions.csv",
+        PROJECT_ROOT / "bin" / "test" / "test_delta_y_metrics.csv",
+        PROJECT_ROOT / "bin" / "overfit_comparison.csv",
+        PROJECT_ROOT / "bin" / "compare" / "figures" / "delta_Voc_train_test_compare.png",
+        PROJECT_ROOT / "bin" / "compare" / "figures" / "delta_Jsc_train_test_compare.png",
+        PROJECT_ROOT / "bin" / "compare" / "figures" / "delta_PCE_train_test_compare.png",
+        PROJECT_ROOT / "bin" / "compare" / "figures" / "delta_FF_train_test_compare.png",
+    ]
+
+    removed = []
+    for file_path in stale_paths:
+        if file_path.exists():
+            file_path.unlink()
+            removed.append(str(file_path))
+
+    if removed:
+        print("已清理旧预测/旧图文件，请重新运行 train -> validate --dataset both -> plot_validate --dataset both：")
+        for path in removed:
+            print(f"  removed: {path}")
+    else:
+        print("未发现需清理的旧预测/旧图文件。")
 
 
 def main():
