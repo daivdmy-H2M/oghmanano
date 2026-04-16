@@ -3,7 +3,6 @@ from pathlib import Path
 import joblib
 import pandas as pd
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
@@ -11,10 +10,17 @@ from sklearn.multioutput import MultiOutputRegressor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-# 当前文件: code/scripts/train
+try:
+    from xgboost import XGBRegressor
+except ModuleNotFoundError as exc:
+    raise ModuleNotFoundError(
+        "未安装 xgboost，请先运行: .\\.venv\\Scripts\\python.exe -m pip install xgboost"
+    ) from exc
+
 SCRIPT_PATH = Path(__file__).resolve()
 PROJECT_ROOT = SCRIPT_PATH.parent.parent
-DATA_DIR = PROJECT_ROOT / "bin" / "train"
+SOURCE_TRAIN_DIR = PROJECT_ROOT / "bin" / "train"
+XGB_TRAIN_DIR = PROJECT_ROOT / "bin" / "XGBoost" / "train"
 
 TARGET_MAP = [
     ("Simulation_Voc", "JV_default_Voc", "delta_Voc"),
@@ -25,10 +31,9 @@ TARGET_MAP = [
 
 
 def load_train_dataset():
-    """只使用 bin/train 中的训练集文件，按 Ref_ID 对齐。"""
-    x_path = DATA_DIR / "train_x.csv"
-    y_path = DATA_DIR / "train_y.csv"
-    y_hat_path = DATA_DIR / "train_y_hat.csv"
+    x_path = SOURCE_TRAIN_DIR / "train_x.csv"
+    y_path = SOURCE_TRAIN_DIR / "train_y.csv"
+    y_hat_path = SOURCE_TRAIN_DIR / "train_y_hat.csv"
 
     for file_path in (x_path, y_path, y_hat_path):
         if not file_path.exists():
@@ -48,7 +53,6 @@ def load_train_dataset():
 
 
 def build_xy(df_x, df_y, df_y_hat):
-    """构建特征 X 和目标 delta_y = y - y_hat。"""
     x = df_x.drop(columns=["Ref_ID"]).copy()
     delta_y = pd.DataFrame(index=df_y.index)
 
@@ -61,7 +65,6 @@ def build_xy(df_x, df_y, df_y_hat):
         y_hat_numeric = pd.to_numeric(df_y_hat[y_hat_col], errors="coerce")
         delta_y[delta_col] = y_numeric - y_hat_numeric
 
-    # 训练目标不允许 NaN：过滤掉任意 delta 列缺失的样本
     valid_mask = ~delta_y.isna().any(axis=1)
     dropped_rows = int((~valid_mask).sum())
     if dropped_rows > 0:
@@ -71,15 +74,12 @@ def build_xy(df_x, df_y, df_y_hat):
     delta_y = delta_y.loc[valid_mask].reset_index(drop=True)
 
     if len(delta_y) < 20:
-        raise ValueError(
-            "可用于训练的有效样本过少（<20），请检查 train_y/train_y_hat 的缺失值。"
-        )
+        raise ValueError("可用于训练的有效样本过少（<20），请检查 train_y/train_y_hat 的缺失值。")
 
     return x, delta_y
 
 
 def build_model(x_sample):
-    """构建预处理+多输出回归模型。"""
     categorical_cols = x_sample.select_dtypes(
         include=["object", "category", "string"]
     ).columns
@@ -110,10 +110,14 @@ def build_model(x_sample):
         ]
     )
 
-    base_regressor = RandomForestRegressor(
-        n_estimators=300,
-        max_depth=10,
-        min_samples_leaf=5,
+    base_regressor = XGBRegressor(
+        n_estimators=500,
+        learning_rate=0.05,
+        max_depth=6,
+        min_child_weight=3,
+        subsample=0.9,
+        colsample_bytree=0.9,
+        objective="reg:squarederror",
         random_state=42,
         n_jobs=-1,
     )
@@ -127,7 +131,9 @@ def build_model(x_sample):
 
 
 def main():
-    print(f"训练数据目录: {DATA_DIR}")
+    print(f"XGBoost 训练数据目录(输入): {SOURCE_TRAIN_DIR}")
+    print(f"XGBoost 输出目录: {XGB_TRAIN_DIR}")
+
     df_x, df_y, df_y_hat = load_train_dataset()
     x, delta_y = build_xy(df_x, df_y, df_y_hat)
 
@@ -141,15 +147,16 @@ def main():
     y_pred = model.predict(x_valid)
     y_pred_df = pd.DataFrame(y_pred, columns=y_valid.columns, index=y_valid.index)
 
-    print("\n验证集指标 (delta_y):")
+    print("\nXGBoost 验证集指标 (delta_y):")
     for col in y_valid.columns:
         mse = mean_squared_error(y_valid[col], y_pred_df[col])
         r2 = r2_score(y_valid[col], y_pred_df[col])
         print(f"{col}: MSE={mse:.6f}, R2={r2:.6f}")
 
-    model_path = DATA_DIR / "delta_y_model.pkl"
+    XGB_TRAIN_DIR.mkdir(parents=True, exist_ok=True)
+    model_path = XGB_TRAIN_DIR / "delta_y_model.pkl"
     joblib.dump(model, model_path)
-    print(f"\n模型已保存: {model_path}")
+    print(f"\nXGBoost 模型已保存: {model_path}")
 
 
 if __name__ == "__main__":
