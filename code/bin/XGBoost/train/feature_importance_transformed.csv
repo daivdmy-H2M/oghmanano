@@ -1,0 +1,17 @@
+﻿transformed_feature,importance
+num__ETL_thickness,0.26692164
+num__HTL_thickness,0.20109858
+num__Backcontact_thickness,0.19648772
+num__Cell_area,0.17983387
+num__Perovskite_thickness,0.1556582
+num__Substrate_thickness,0.0
+cat__Layer_1_Substrate,0.0
+cat__Layer_1_material_FTO,0.0
+cat__Layer_2_ETL,0.0
+cat__Layer_2_material_TiO2-c,0.0
+cat__Layer_3_Perovskite,0.0
+cat__Layer_3_material_MAPbI3,0.0
+cat__Layer_4_HTL,0.0
+cat__Layer_4_material_Spiro-MeOTAD,0.0
+cat__Layer_5_Backcontact,0.0
+cat__Layer_5_material_Au,0.0

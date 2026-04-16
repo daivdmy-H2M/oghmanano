@@ -1,0 +1,17 @@
+﻿feature,importance,is_low_importance,exists_in_training_x
+ETL_thickness,0.26692163944244385,False,True
+HTL_thickness,0.20109857618808746,False,True
+Backcontact_thickness,0.19648772478103638,False,True
+Cell_area,0.17983387410640717,False,True
+Perovskite_thickness,0.15565820038318634,False,True
+Substrate_thickness,0.0,True,True
+Layer_1,0.0,True,True
+Layer_1_material,0.0,True,True
+Layer_2,0.0,True,True
+Layer_2_material,0.0,True,True
+Layer_3,0.0,True,True
+Layer_3_material,0.0,True,True
+Layer_4,0.0,True,True
+Layer_4_material,0.0,True,True
+Layer_5,0.0,True,True
+Layer_5_material,0.0,True,True
