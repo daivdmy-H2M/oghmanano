@@ -8,6 +8,8 @@ PROJECT_ROOT = SCRIPT_PATH.parent.parent
 ANALYSES_DIR = PROJECT_ROOT / "bin" / "analyses1"
 TRAIN_DIR = PROJECT_ROOT / "bin" / "train"
 TEST_DIR = PROJECT_ROOT / "bin" / "test"
+CLEANED_DIR = PROJECT_ROOT / "bin" / "cleaned"
+FIGURE_DIR = CLEANED_DIR / "figures"
 
 RANDOM_STATE = 42
 TEST_SIZE = 0.25
@@ -158,11 +160,140 @@ def split_and_save(df_x, df_y, df_y_hat, excluded_ids):
     print(f"  输出目录: {TRAIN_DIR} 和 {TEST_DIR}")
 
 
+def save_cleaned_outputs(df_x, df_y, df_y_hat):
+    """输出清洗后的全量数据和 FF 差值分布图。"""
+    CLEANED_DIR.mkdir(parents=True, exist_ok=True)
+    FIGURE_DIR.mkdir(parents=True, exist_ok=True)
+
+    cleaned_x_path = CLEANED_DIR / "cleaned_x.csv"
+    cleaned_y_path = CLEANED_DIR / "cleaned_y.csv"
+    cleaned_y_hat_path = CLEANED_DIR / "cleaned_y_hat.csv"
+    summary_path = CLEANED_DIR / "cleaned_summary.csv"
+    fig_path = FIGURE_DIR / "ff_delta_distribution.svg"
+
+    df_x.sort_values("Ref_ID").to_csv(cleaned_x_path, index=False, encoding="utf-8-sig")
+    df_y.sort_values("Ref_ID").to_csv(cleaned_y_path, index=False, encoding="utf-8-sig")
+    df_y_hat.sort_values("Ref_ID").to_csv(
+        cleaned_y_hat_path, index=False, encoding="utf-8-sig"
+    )
+
+    simulation_ff = pd.to_numeric(df_y["Simulation_FF"], errors="coerce")
+    jv_default_ff = pd.to_numeric(df_y_hat["JV_default_FF"], errors="coerce")
+    ff_delta = simulation_ff - jv_default_ff
+
+    summary_df = pd.DataFrame(
+        {
+            "metric": [
+                "sample_count",
+                "ff_delta_min",
+                "ff_delta_q1",
+                "ff_delta_median",
+                "ff_delta_q3",
+                "ff_delta_max",
+            ],
+            "value": [
+                int(len(df_x)),
+                float(ff_delta.min(skipna=True)),
+                float(ff_delta.quantile(0.25)),
+                float(ff_delta.median(skipna=True)),
+                float(ff_delta.quantile(0.75)),
+                float(ff_delta.max(skipna=True)),
+            ],
+        }
+    )
+    summary_df.to_csv(summary_path, index=False, encoding="utf-8-sig")
+
+    ff_delta_clean = [float(v) for v in ff_delta.dropna().tolist()]
+    if ff_delta_clean:
+        num_bins = 40
+        x_min, x_max = min(ff_delta_clean), max(ff_delta_clean)
+        if x_max == x_min:
+            x_max = x_min + 1e-9
+        bin_width = (x_max - x_min) / num_bins
+        edges = [x_min + i * bin_width for i in range(num_bins + 1)]
+        counts = [0] * num_bins
+        for value in ff_delta_clean:
+            if value >= x_max:
+                bin_index = num_bins - 1
+            else:
+                bin_index = int((value - x_min) / bin_width)
+                bin_index = min(max(bin_index, 0), num_bins - 1)
+            counts[bin_index] += 1
+
+        max_count = max(counts) if counts else 1
+
+        width, height = 960, 600
+        left, right, top, bottom = 80, 40, 60, 80
+        plot_w = width - left - right
+        plot_h = height - top - bottom
+        bar_w = plot_w / len(counts)
+
+        def to_svg_x(value):
+            x0, x1 = float(edges[0]), float(edges[-1])
+            if x1 == x0:
+                return left
+            return left + (value - x0) / (x1 - x0) * plot_w
+
+        bars = []
+        for i, count in enumerate(counts):
+            x = left + i * bar_w
+            h = 0 if max_count == 0 else (count / max_count) * plot_h
+            y = top + (plot_h - h)
+            bars.append(
+                f'<rect x="{x:.2f}" y="{y:.2f}" width="{bar_w - 1:.2f}" '
+                f'height="{h:.2f}" fill="#3B82F6" opacity="0.85" />'
+            )
+
+        threshold_x = to_svg_x(FF_OUTLIER_THRESHOLD)
+        svg_content = f"""<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">
+  <rect width="100%" height="100%" fill="white"/>
+  <text x="{width/2}" y="30" text-anchor="middle" font-size="20" font-family="Arial">
+    Distribution of Simulation_FF - JV_default_FF (After Cleaning)
+  </text>
+  <line x1="{left}" y1="{top + plot_h}" x2="{left + plot_w}" y2="{top + plot_h}" stroke="#111" stroke-width="2"/>
+  <line x1="{left}" y1="{top}" x2="{left}" y2="{top + plot_h}" stroke="#111" stroke-width="2"/>
+  {''.join(bars)}
+  <line x1="{threshold_x:.2f}" y1="{top}" x2="{threshold_x:.2f}" y2="{top + plot_h}" stroke="#EF4444" stroke-width="2" stroke-dasharray="8 6"/>
+  <text x="{threshold_x:.2f}" y="{top - 10}" text-anchor="middle" font-size="12" fill="#EF4444" font-family="Arial">
+    threshold {FF_OUTLIER_THRESHOLD}
+  </text>
+  <text x="{left + plot_w/2}" y="{height - 20}" text-anchor="middle" font-size="14" font-family="Arial">FF delta</text>
+  <text x="24" y="{top + plot_h/2}" transform="rotate(-90,24,{top + plot_h/2})" text-anchor="middle" font-size="14" font-family="Arial">Count</text>
+</svg>
+"""
+        fig_path.write_text(svg_content, encoding="utf-8")
+    else:
+        fig_path.write_text(
+            "<svg xmlns='http://www.w3.org/2000/svg' width='960' height='120'>"
+            "<text x='20' y='60' font-size='20'>No valid FF delta data after cleaning.</text>"
+            "</svg>",
+            encoding="utf-8",
+        )
+
+    print("已输出清洗后的全量数据与图像：")
+    print(f"  {cleaned_x_path}")
+    print(f"  {cleaned_y_path}")
+    print(f"  {cleaned_y_hat_path}")
+    print(f"  {summary_path}")
+    print(f"  {fig_path}")
+
+
 def main():
     df_x, df_y, df_y_hat = load_aligned_inputs()
     excluded_ids = collect_ref_ids_to_exclude()
     ff_outlier_ids = collect_ff_outlier_ref_ids(df_x, df_y, df_y_hat)
     excluded_ids = excluded_ids.union(ff_outlier_ids)
+    if excluded_ids:
+        keep_mask = ~df_x["Ref_ID"].astype(str).isin(excluded_ids)
+        cleaned_x = df_x.loc[keep_mask].reset_index(drop=True)
+        cleaned_y = df_y.loc[keep_mask].reset_index(drop=True)
+        cleaned_y_hat = df_y_hat.loc[keep_mask].reset_index(drop=True)
+    else:
+        cleaned_x = df_x.copy()
+        cleaned_y = df_y.copy()
+        cleaned_y_hat = df_y_hat.copy()
+
+    save_cleaned_outputs(cleaned_x, cleaned_y, cleaned_y_hat)
     split_and_save(df_x, df_y, df_y_hat, excluded_ids)
 
 
