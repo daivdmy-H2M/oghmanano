@@ -20,7 +20,6 @@ OUTLIER_EXPECTED_VALUE = -4.2
 OUTLIER_TOLERANCE = 0.25
 MANUAL_EXCLUDE_FILE = PROJECT_ROOT / "bin" / "excluded_ref_ids.txt"
 FF_OUTLIER_THRESHOLD = -1.0
-INVALIDATE_AFTER_SPLIT = True
 
 
 def load_aligned_inputs():
@@ -195,8 +194,10 @@ def main():
     ff_outlier_ids = collect_ff_outlier_ref_ids(df_x, df_y, df_y_hat)
     excluded_ids = excluded_ids.union(ff_outlier_ids)
     split_and_save(df_x, df_y, df_y_hat, excluded_ids)
-    if INVALIDATE_AFTER_SPLIT:
-        invalidate_downstream_artifacts()
+    print("提示：若需更新 bin/compare/figures 下的 train-test 对比图，请依次运行：")
+    print("  1) scripts/train")
+    print("  2) scripts/validate --dataset both")
+    print("  3) scripts/plot_validate --dataset both")
 
 
 if __name__ == "__main__":
