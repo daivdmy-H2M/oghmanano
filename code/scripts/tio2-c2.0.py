@@ -232,13 +232,11 @@ def main():
     print("正在读取原始数据...")
     df = pd.read_csv(CSV_PATH, low_memory=False)
 
-    # 仅调试前 100 个 Ref_ID，避免全量仿真耗时。
     df["Ref_ID_numeric"] = pd.to_numeric(df["Ref_ID"], errors="coerce")
 
     for col, expected in FILTER_RULES.items():
         df = df[df[col] == expected]
 
-    df = df[df["Ref_ID_numeric"] <= 100]
     df = df.drop(columns=["Ref_ID_numeric"])
 
     print(f"过滤后样本数量: {len(df)}")
@@ -257,7 +255,6 @@ def main():
                 "Ref_ID": ref_id,
                 "Simulation_Voc": sim_result["Simulation_Voc"],
                 "Simulation_Jsc": sim_result["Simulation_Jsc"],
-                "JV_default_Voc": row.get("JV_default_Voc", np.nan),
                 "Simulation_PCE": sim_result["Simulation_PCE"],
                 "Simulation_FF": sim_result["Simulation_FF"],
             }
@@ -282,6 +279,10 @@ def main():
     x_path = BIN_OUTPUT_DIR / "tio2-c2.0_x.csv"
     y_path = BIN_OUTPUT_DIR / "tio2-c2.0_y.csv"
     y_hat_path = BIN_OUTPUT_DIR / "tio2-c2.0_y_hat.csv"
+
+    # 当输出目标为 tio2-c2.0_y.csv 时，按要求将 Simulation_Jsc 取绝对值后再除以 10。
+    if y_path.name == "tio2-c2.0_y.csv" and "Simulation_Jsc" in y_df.columns:
+        y_df["Simulation_Jsc"] = pd.to_numeric(y_df["Simulation_Jsc"], errors="coerce").abs() / 10
 
     x_df.to_csv(x_path, index=False, encoding="utf-8-sig")
     y_df.to_csv(y_path, index=False, encoding="utf-8-sig")

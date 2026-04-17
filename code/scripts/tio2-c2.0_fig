@@ -1,0 +1,253 @@
+from pathlib import Path
+
+import joblib
+import matplotlib.pyplot as plt
+import pandas as pd
+from sklearn.metrics import r2_score
+
+SCRIPT_PATH = Path(__file__).resolve()
+PROJECT_ROOT = SCRIPT_PATH.parent.parent
+DATA_DIR = PROJECT_ROOT / "bin" / "tio2-c_2.0"
+TRAIN_DIR = DATA_DIR / "2.0train"
+TEST_DIR = DATA_DIR / "2.0test"
+ANALYSIS_TEST_DIR = DATA_DIR / "analysis" / "test"
+ANALYSIS_COMPARE_DIR = DATA_DIR / "analysis" / "compare"
+MODEL_PATH = DATA_DIR / "delta_y_model.pkl"
+
+TARGET_MAP = [
+    ("Simulation_Voc", "JV_default_Voc", "delta_Voc"),
+    ("Simulation_Jsc", "JV_default_Jsc", "delta_Jsc"),
+    ("Simulation_PCE", "JV_default_PCE", "delta_PCE"),
+    ("Simulation_FF", "JV_default_FF", "delta_FF"),
+]
+
+
+def load_split_dataset(split_dir, split_name):
+    x_path = split_dir / f"{split_name}_x.csv"
+    y_path = split_dir / f"{split_name}_y.csv"
+    y_hat_path = split_dir / f"{split_name}_y_hat.csv"
+
+    for file_path in (x_path, y_path, y_hat_path):
+        if not file_path.exists():
+            raise FileNotFoundError(f"缺少 {split_name} 数据文件: {file_path}")
+
+    data_x = pd.read_csv(x_path).sort_values("Ref_ID").reset_index(drop=True)
+    data_y = pd.read_csv(y_path).sort_values("Ref_ID").reset_index(drop=True)
+    data_y_hat = pd.read_csv(y_hat_path).sort_values("Ref_ID").reset_index(drop=True)
+
+    if not (
+        data_x["Ref_ID"].equals(data_y["Ref_ID"])
+        and data_y["Ref_ID"].equals(data_y_hat["Ref_ID"])
+    ):
+        raise ValueError(f"{split_name}_x / {split_name}_y / {split_name}_y_hat 的 Ref_ID 未对齐。")
+
+    return data_x, data_y, data_y_hat
+
+
+def build_delta_true(data_y, data_y_hat):
+    delta_df = pd.DataFrame(index=data_y.index)
+    for sim_col, real_col, delta_col in TARGET_MAP:
+        sim_val = pd.to_numeric(data_y[sim_col], errors="coerce")
+        real_val = pd.to_numeric(data_y_hat[real_col], errors="coerce")
+        delta_df[delta_col] = sim_val - real_val
+    return delta_df
+
+
+def collect_predictions(model, split_x, split_y, split_y_hat):
+    features = split_x.drop(columns=["Ref_ID"]).copy()
+    delta_true = build_delta_true(split_y, split_y_hat)
+
+    valid_mask = ~delta_true.isna().any(axis=1)
+    features = features.loc[valid_mask].reset_index(drop=True)
+    delta_true = delta_true.loc[valid_mask].reset_index(drop=True)
+    ref_id = split_x.loc[valid_mask, "Ref_ID"].reset_index(drop=True)
+
+    delta_pred = pd.DataFrame(
+        model.predict(features),
+        columns=delta_true.columns,
+        index=delta_true.index,
+    )
+    return ref_id, delta_true, delta_pred
+
+
+def safe_r2(y_true, y_pred):
+    if len(y_true) < 2:
+        return float("nan")
+    return r2_score(y_true, y_pred)
+
+
+def plot_compare_panel(target, train_df, test_df):
+    train_true = train_df[f"{target}_true"]
+    train_pred = train_df[f"{target}_pred"]
+    test_true = test_df[f"{target}_true"]
+    test_pred = test_df[f"{target}_pred"]
+
+    merged_df = pd.concat(
+        [
+            pd.DataFrame({"true": train_true, "pred": train_pred}),
+            pd.DataFrame({"true": test_true, "pred": test_pred}),
+        ],
+        axis=0,
+    ).dropna()
+    if merged_df.empty:
+        print(f"⚠️ {target} 无可用数据，跳过 compare 图。")
+        return
+
+    train_valid = pd.DataFrame({"true": train_true, "pred": train_pred}).dropna()
+    test_valid = pd.DataFrame({"true": test_true, "pred": test_pred}).dropna()
+
+    r2_train = safe_r2(train_valid["true"], train_valid["pred"])
+    r2_test = safe_r2(test_valid["true"], test_valid["pred"])
+    r2_all = safe_r2(merged_df["true"], merged_df["pred"])
+
+    min_val = min(merged_df["true"].min(), merged_df["pred"].min())
+    max_val = max(merged_df["true"].max(), merged_df["pred"].max())
+    padding = (max_val - min_val) * 0.05 if max_val > min_val else 0.1
+    lower = min_val - padding
+    upper = max_val + padding
+
+    plt.figure(figsize=(6, 6), dpi=140)
+    ax = plt.gca()
+    ax.scatter(
+        train_valid["true"],
+        train_valid["pred"],
+        s=28,
+        facecolors="none",
+        edgecolors="#1f5aa6",
+        linewidths=1.1,
+        marker="o",
+        label="train",
+    )
+    ax.scatter(
+        test_valid["true"],
+        test_valid["pred"],
+        s=28,
+        facecolors="none",
+        edgecolors="#d62728",
+        linewidths=1.1,
+        marker="s",
+        label="test",
+    )
+    ax.plot([lower, upper], [lower, upper], linestyle="--", color="black", linewidth=1.2)
+    ax.set_xlim(lower, upper)
+    ax.set_ylim(lower, upper)
+    ax.set_xlabel("Actual Values")
+    ax.set_ylabel("Predicted Values")
+    ax.set_title(f"{target} - RF")
+    # 避免与左上角 R² 文本框重叠：图例放到右下角。
+    ax.legend(loc="lower right")
+    ax.grid(alpha=0.2)
+
+    metric_text = (
+        f"R²(all)={r2_all:.4f}\n"
+        f"R²(train)={r2_train:.4f}\n"
+        f"R²(test)={r2_test:.4f}"
+    )
+    ax.text(
+        0.03,
+        0.97,
+        metric_text,
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        fontsize=9,
+        bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "gray"},
+    )
+    plt.tight_layout()
+    output_path = ANALYSIS_COMPARE_DIR / f"{target}_train_test_compare.png"
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+    print(f"✅ compare 图已保存: {output_path}")
+
+
+def plot_test_analysis_panel(target, test_df):
+    true_col = f"{target}_true"
+    pred_col = f"{target}_pred"
+
+    sub_df = test_df[[true_col, pred_col]].dropna().copy()
+    if sub_df.empty:
+        print(f"⚠️ {target} 无可用数据，跳过 test 分析图。")
+        return
+    sub_df["error"] = sub_df[pred_col] - sub_df[true_col]
+
+    min_val = min(sub_df[true_col].min(), sub_df[pred_col].min())
+    max_val = max(sub_df[true_col].max(), sub_df[pred_col].max())
+    padding = (max_val - min_val) * 0.05 if max_val > min_val else 0.1
+    lower = min_val - padding
+    upper = max_val + padding
+
+    plt.figure(figsize=(12, 5), dpi=120)
+
+    ax1 = plt.subplot(1, 2, 1)
+    ax1.scatter(
+        sub_df[true_col],
+        sub_df[pred_col],
+        c="#1f77b4",
+        s=28,
+        alpha=0.75,
+        edgecolors="none",
+    )
+    ax1.plot([lower, upper], [lower, upper], color="black", linewidth=1.2, label="y=x")
+    ax1.set_xlim(lower, upper)
+    ax1.set_ylim(lower, upper)
+    ax1.set_title(f"{target}: True vs Pred")
+    ax1.set_xlabel("True delta_y")
+    ax1.set_ylabel("Pred delta_y")
+    ax1.grid(alpha=0.25)
+    ax1.legend(loc="lower right")
+
+    ax2 = plt.subplot(1, 2, 2)
+    ax2.hist(sub_df["error"], bins=30, color="#f7933a", alpha=0.95, edgecolor="white")
+    ax2.axvline(0, color="black", linewidth=1.1)
+    ax2.set_title(f"{target}: Error Distribution")
+    ax2.set_xlabel("Prediction Error (pred - true)")
+    ax2.set_ylabel("Count")
+    ax2.grid(alpha=0.25)
+
+    plt.tight_layout()
+    output_path = ANALYSIS_TEST_DIR / f"{target}_analysis.png"
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+    print(f"✅ test 分析图已保存: {output_path}")
+
+
+def main():
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(
+            f"未找到模型文件: {MODEL_PATH}。请先运行训练脚本生成模型。"
+        )
+
+    ANALYSIS_TEST_DIR.mkdir(parents=True, exist_ok=True)
+    ANALYSIS_COMPARE_DIR.mkdir(parents=True, exist_ok=True)
+
+    train_x, train_y, train_y_hat = load_split_dataset(TRAIN_DIR, "train")
+    test_x, test_y, test_y_hat = load_split_dataset(TEST_DIR, "test")
+
+    model = joblib.load(MODEL_PATH)
+
+    train_ref, train_true, train_pred = collect_predictions(model, train_x, train_y, train_y_hat)
+    test_ref, test_true, test_pred = collect_predictions(model, test_x, test_y, test_y_hat)
+
+    train_result = pd.DataFrame({"Ref_ID": train_ref})
+    test_result = pd.DataFrame({"Ref_ID": test_ref})
+
+    for _, _, target in TARGET_MAP:
+        train_result[f"{target}_true"] = train_true[target]
+        train_result[f"{target}_pred"] = train_pred[target]
+        test_result[f"{target}_true"] = test_true[target]
+        test_result[f"{target}_pred"] = test_pred[target]
+
+        plot_compare_panel(target, train_result, test_result)
+        plot_test_analysis_panel(target, test_result)
+
+    train_result.to_csv(
+        ANALYSIS_TEST_DIR / "train_delta_predictions.csv", index=False, encoding="utf-8-sig"
+    )
+    test_result.to_csv(
+        ANALYSIS_TEST_DIR / "test_delta_predictions.csv", index=False, encoding="utf-8-sig"
+    )
+    print("✅ 所有分析图与预测结果已输出完成。")
+
+
+if __name__ == "__main__":
+    main()
