@@ -42,6 +42,23 @@ def parse_float(value):
         return None
 
 
+def parse_first_valid_float(value):
+    """支持从 'a|b' 或 'a; b' 文本中提取第一个有效数字。"""
+    if not is_valid_data(value):
+        return None
+
+    normalized = str(value).replace("|", ";")
+    for part in normalized.split(";"):
+        token = part.strip()
+        if token.lower() in {"", "nan", "none"}:
+            continue
+        try:
+            return float(token)
+        except ValueError:
+            continue
+    return None
+
+
 def parse_pipe_second(value):
     """从 `a|b` 取 b；若不存在或无效返回 None。"""
     if not is_valid_data(value):
@@ -112,30 +129,30 @@ def update_sim_json(sim_data, row):
     if "sim" in sim_data:
         sim_data["sim"]["use_json_local_root"] = "false"
 
-    # A. Substrate_thickness: 数据格式 SLG|FTO，忽略 SLG，提取 FTO (um -> nm)
+    # A. Substrate_thickness: 数据格式 SLG|FTO，忽略 SLG，提取 FTO (um -> m)
     sub_fto_um = parse_pipe_second(row.get("Substrate_thickness"))
     if sub_fto_um is not None:
-        sim_data["epitaxy"]["segment0"]["dy"] = sub_fto_um * 1000.0
+        sim_data["epitaxy"]["segment0"]["dy"] = sub_fto_um * 1e-6
 
-    # B. ETL_thickness: nm -> nm
+    # B. ETL_thickness: nm -> m
     etl_nm = parse_float(row.get("ETL_thickness"))
     if etl_nm is not None:
-        sim_data["epitaxy"]["segment1"]["dy"] = etl_nm
+        sim_data["epitaxy"]["segment1"]["dy"] = etl_nm * 1e-9
 
-    # C. Perovskite_thickness: nm -> nm
+    # C. Perovskite_thickness: nm -> m
     pero_nm = parse_float(row.get("Perovskite_thickness"))
     if pero_nm is not None:
-        sim_data["epitaxy"]["segment2"]["dy"] = pero_nm
+        sim_data["epitaxy"]["segment2"]["dy"] = pero_nm * 1e-9
 
-    # D. HTL_thickness_list: nm -> nm
+    # D. HTL_thickness_list: nm -> m
     htl_nm = parse_float(row.get("HTL_thickness_list"))
     if htl_nm is not None:
-        sim_data["epitaxy"]["segment3"]["dy"] = htl_nm
+        sim_data["epitaxy"]["segment3"]["dy"] = htl_nm * 1e-9
 
-    # E. Backcontact_thickness_list: nm -> nm
+    # E. Backcontact_thickness_list: nm -> m
     bc_nm = parse_float(row.get("Backcontact_thickness_list"))
     if bc_nm is not None:
-        sim_data["epitaxy"]["segment4"]["dy"] = bc_nm
+        sim_data["epitaxy"]["segment4"]["dy"] = bc_nm * 1e-9
 
     # F. Cell_area_measured: cm2 -> sqrt -> m，写入 x/z 边长
     area_cm2 = parse_float(row.get("Cell_area_measured"))
@@ -150,8 +167,8 @@ def update_sim_json(sim_data, row):
                 seg["dz"] = side_length_m
 
     # G. Perovskite_band_gap -> segment2.shape_dos.Eg
-    band_gap = parse_float(row.get("Perovskite_band_gap"))
-    if band_gap is not None:
+    band_gap = parse_first_valid_float(row.get("Perovskite_band_gap"))
+    if band_gap is not None and 0.5 <= band_gap <= 3.5:
         if "shape_dos" in sim_data["epitaxy"]["segment2"]:
             sim_data["epitaxy"]["segment2"]["shape_dos"]["Eg"] = str(band_gap)
 
@@ -215,8 +232,14 @@ def main():
     print("正在读取原始数据...")
     df = pd.read_csv(CSV_PATH, low_memory=False)
 
+    # 仅调试前 100 个 Ref_ID，避免全量仿真耗时。
+    df["Ref_ID_numeric"] = pd.to_numeric(df["Ref_ID"], errors="coerce")
+
     for col, expected in FILTER_RULES.items():
         df = df[df[col] == expected]
+
+    df = df[df["Ref_ID_numeric"] <= 100]
+    df = df.drop(columns=["Ref_ID_numeric"])
 
     print(f"过滤后样本数量: {len(df)}")
 
