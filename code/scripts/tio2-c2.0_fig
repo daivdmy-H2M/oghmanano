@@ -134,7 +134,8 @@ def plot_compare_panel(target, train_df, test_df):
     ax.set_xlabel("Actual Values")
     ax.set_ylabel("Predicted Values")
     ax.set_title(f"{target} - RF")
-    ax.legend(loc="upper left")
+    # 避免与左上角 R² 文本框重叠：图例放到右下角。
+    ax.legend(loc="lower right")
     ax.grid(alpha=0.2)
 
     metric_text = (
