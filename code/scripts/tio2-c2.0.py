@@ -232,13 +232,11 @@ def main():
     print("正在读取原始数据...")
     df = pd.read_csv(CSV_PATH, low_memory=False)
 
-    # 仅调试前 100 个 Ref_ID，避免全量仿真耗时。
     df["Ref_ID_numeric"] = pd.to_numeric(df["Ref_ID"], errors="coerce")
 
     for col, expected in FILTER_RULES.items():
         df = df[df[col] == expected]
 
-    df = df[df["Ref_ID_numeric"] <= 100]
     df = df.drop(columns=["Ref_ID_numeric"])
 
     print(f"过滤后样本数量: {len(df)}")
