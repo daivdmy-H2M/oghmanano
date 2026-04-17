@@ -257,7 +257,6 @@ def main():
                 "Ref_ID": ref_id,
                 "Simulation_Voc": sim_result["Simulation_Voc"],
                 "Simulation_Jsc": sim_result["Simulation_Jsc"],
-                "JV_default_Voc": row.get("JV_default_Voc", np.nan),
                 "Simulation_PCE": sim_result["Simulation_PCE"],
                 "Simulation_FF": sim_result["Simulation_FF"],
             }
