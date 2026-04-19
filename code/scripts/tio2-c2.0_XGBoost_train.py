@@ -14,23 +14,22 @@ from xgboost import XGBRegressor
 SCRIPT_PATH = Path(__file__).resolve()
 PROJECT_ROOT = SCRIPT_PATH.parent.parent
 DATA_DIR = PROJECT_ROOT / "bin" / "tio2-c_2.0"
+OUTPUT_BASE_DIR = PROJECT_ROOT / "bin" / "tio2_c_3.0"
 
 TRAIN_DIR = DATA_DIR / "2.0train"
 TEST_DIR = DATA_DIR / "2.0test"
-OUTPUT_DIR = DATA_DIR / "XGBoost"
-COMPARE_DIR = OUTPUT_DIR / "compare"
+MODEL_STEP_DIR = OUTPUT_BASE_DIR / "model_step"
+ANALYSIS_DIR = OUTPUT_BASE_DIR / "analysis"
 
-MODEL_PATH = OUTPUT_DIR / "delta_y_model.pkl"
-TRAIN_PRED_PATH = OUTPUT_DIR / "train_delta_y_predictions.csv"
-TEST_PRED_PATH = OUTPUT_DIR / "test_delta_y_predictions.csv"
-TRAIN_METRIC_PATH = OUTPUT_DIR / "train_delta_y_metrics.csv"
-TEST_METRIC_PATH = OUTPUT_DIR / "test_delta_y_metrics.csv"
+ITERATION_START = 100
+ITERATION_END = 600
+ITERATION_STEP = 50
 
 TARGET_MAP = [
-    ("Simulation_Voc", "JV_default_Voc", "delta_Voc"),
-    ("Simulation_Jsc", "JV_default_Jsc", "delta_Jsc"),
-    ("Simulation_PCE", "JV_default_PCE", "delta_PCE"),
-    ("Simulation_FF", "JV_default_FF", "delta_FF"),
+    ("Simulation_Voc", "JV_default_Voc", "Voc"),
+    ("Simulation_Jsc", "JV_default_Jsc", "Jsc"),
+    ("Simulation_PCE", "JV_default_PCE", "PCE"),
+    ("Simulation_FF", "JV_default_FF", "FF"),
 ]
 
 
@@ -60,7 +59,7 @@ def load_split_dataset(split_dir: Path, split_name: str):
 
 def build_delta_targets(df_y: pd.DataFrame, df_y_hat: pd.DataFrame) -> pd.DataFrame:
     delta_df = pd.DataFrame(index=df_y.index)
-    for sim_col, real_col, delta_col in TARGET_MAP:
+    for sim_col, real_col, target_name in TARGET_MAP:
         if sim_col not in df_y.columns:
             raise KeyError(f"{sim_col} 不在 y 数据中")
         if real_col not in df_y_hat.columns:
@@ -68,11 +67,11 @@ def build_delta_targets(df_y: pd.DataFrame, df_y_hat: pd.DataFrame) -> pd.DataFr
 
         sim_val = pd.to_numeric(df_y[sim_col], errors="coerce")
         real_val = pd.to_numeric(df_y_hat[real_col], errors="coerce")
-        delta_df[delta_col] = sim_val - real_val
+        delta_df[f"delta_{target_name}"] = sim_val - real_val
     return delta_df
 
 
-def build_model(x_sample: pd.DataFrame) -> Pipeline:
+def build_model(x_sample: pd.DataFrame, n_estimators: int) -> Pipeline:
     categorical_cols = x_sample.select_dtypes(
         include=["object", "category", "string"]
     ).columns
@@ -104,7 +103,7 @@ def build_model(x_sample: pd.DataFrame) -> Pipeline:
     )
 
     base_regressor = XGBRegressor(
-        n_estimators=600,
+        n_estimators=n_estimators,
         learning_rate=0.03,
         max_depth=6,
         min_child_weight=3,
@@ -197,6 +196,29 @@ def plot_compare(train_true, train_pred, test_true, test_pred, title, output_pat
     plt.close()
 
 
+def plot_test_r2_curve(r2_df: pd.DataFrame, output_path: Path):
+    plt.figure(figsize=(8, 5), dpi=160)
+    ax = plt.gca()
+    for target in ["Voc", "Jsc", "PCE", "FF"]:
+        target_rows = r2_df[r2_df["target"] == target].sort_values("n_estimators")
+        ax.plot(
+            target_rows["n_estimators"],
+            target_rows["R2"],
+            marker="o",
+            linewidth=1.6,
+            label=target,
+        )
+
+    ax.set_xlabel("Iteration Count (n_estimators)")
+    ax.set_ylabel("Test R²")
+    ax.set_title("XGBoost Test R² vs Iteration Count")
+    ax.grid(alpha=0.25)
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+
+
 def main():
     print(f"读取训练数据: {TRAIN_DIR}")
     print(f"读取测试数据: {TEST_DIR}")
@@ -221,55 +243,87 @@ def main():
     test_delta = test_delta.loc[valid_test_mask].reset_index(drop=True)
     test_ref_id = test_x_df.loc[valid_test_mask, "Ref_ID"].reset_index(drop=True)
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    COMPARE_DIR.mkdir(parents=True, exist_ok=True)
+    MODEL_STEP_DIR.mkdir(parents=True, exist_ok=True)
+    ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
 
-    model = build_model(train_features)
-    model.fit(train_features, train_delta)
-    joblib.dump(model, MODEL_PATH)
-    print(f"模型已保存: {MODEL_PATH}")
+    iteration_values = list(range(ITERATION_START, ITERATION_END + 1, ITERATION_STEP))
+    test_r2_history = []
 
-    train_pred = pd.DataFrame(model.predict(train_features), columns=train_delta.columns)
-    test_pred = pd.DataFrame(model.predict(test_features), columns=test_delta.columns)
+    for n_estimators in iteration_values:
+        step_model_path = MODEL_STEP_DIR / f"xgboost_delta_y_{n_estimators}.pkl"
+        step_analysis_dir = ANALYSIS_DIR / f"iter_{n_estimators}"
+        step_compare_dir = step_analysis_dir / "compare"
+        step_analysis_dir.mkdir(parents=True, exist_ok=True)
+        step_compare_dir.mkdir(parents=True, exist_ok=True)
 
-    train_pred_df = pd.DataFrame({"Ref_ID": train_ref_id})
-    test_pred_df = pd.DataFrame({"Ref_ID": test_ref_id})
-    train_metric_rows = []
-    test_metric_rows = []
+        model = build_model(train_features, n_estimators=n_estimators)
+        model.fit(train_features, train_delta)
+        joblib.dump(model, step_model_path)
+        print(f"[{n_estimators}] 模型已保存: {step_model_path}")
 
-    for _, _, delta_col in TARGET_MAP:
-        train_pred_df[f"{delta_col}_true"] = train_delta[delta_col]
-        train_pred_df[f"{delta_col}_pred"] = train_pred[delta_col]
-        train_pred_df[f"{delta_col}_error"] = train_pred[delta_col] - train_delta[delta_col]
+        train_pred = pd.DataFrame(model.predict(train_features), columns=train_delta.columns)
+        test_pred = pd.DataFrame(model.predict(test_features), columns=test_delta.columns)
 
-        test_pred_df[f"{delta_col}_true"] = test_delta[delta_col]
-        test_pred_df[f"{delta_col}_pred"] = test_pred[delta_col]
-        test_pred_df[f"{delta_col}_error"] = test_pred[delta_col] - test_delta[delta_col]
+        train_pred_df = pd.DataFrame({"Ref_ID": train_ref_id})
+        test_pred_df = pd.DataFrame({"Ref_ID": test_ref_id})
+        train_metric_rows = []
+        test_metric_rows = []
 
-        train_metric = calc_metrics(train_delta[delta_col], train_pred[delta_col])
-        train_metric_rows.append({"target": delta_col, **train_metric})
-        test_metric = calc_metrics(test_delta[delta_col], test_pred[delta_col])
-        test_metric_rows.append({"target": delta_col, **test_metric})
+        for _, _, target_name in TARGET_MAP:
+            delta_col = f"delta_{target_name}"
+            train_pred_df[f"{delta_col}_true"] = train_delta[delta_col]
+            train_pred_df[f"{delta_col}_pred"] = train_pred[delta_col]
+            train_pred_df[f"{delta_col}_error"] = train_pred[delta_col] - train_delta[delta_col]
 
-        plot_compare(
-            train_true=train_delta[delta_col],
-            train_pred=train_pred[delta_col],
-            test_true=test_delta[delta_col],
-            test_pred=test_pred[delta_col],
-            title=delta_col,
-            output_path=COMPARE_DIR / f"{delta_col}_train_test_compare.png",
-        )
+            test_pred_df[f"{delta_col}_true"] = test_delta[delta_col]
+            test_pred_df[f"{delta_col}_pred"] = test_pred[delta_col]
+            test_pred_df[f"{delta_col}_error"] = test_pred[delta_col] - test_delta[delta_col]
 
-    train_pred_df.to_csv(TRAIN_PRED_PATH, index=False, encoding="utf-8-sig")
-    test_pred_df.to_csv(TEST_PRED_PATH, index=False, encoding="utf-8-sig")
-    pd.DataFrame(train_metric_rows).to_csv(TRAIN_METRIC_PATH, index=False, encoding="utf-8-sig")
-    pd.DataFrame(test_metric_rows).to_csv(TEST_METRIC_PATH, index=False, encoding="utf-8-sig")
+            train_metric = calc_metrics(train_delta[delta_col], train_pred[delta_col])
+            train_metric_rows.append({"target": target_name, **train_metric})
+            test_metric = calc_metrics(test_delta[delta_col], test_pred[delta_col])
+            test_metric_rows.append({"target": target_name, **test_metric})
+            test_r2_history.append(
+                {
+                    "n_estimators": n_estimators,
+                    "target": target_name,
+                    "R2": test_metric["R2"],
+                }
+            )
 
-    print(f"训练集预测结果: {TRAIN_PRED_PATH}")
-    print(f"测试集预测结果: {TEST_PRED_PATH}")
-    print(f"训练集指标: {TRAIN_METRIC_PATH}")
-    print(f"测试集指标: {TEST_METRIC_PATH}")
-    print(f"对比图目录: {COMPARE_DIR}")
+            plot_compare(
+                train_true=train_delta[delta_col],
+                train_pred=train_pred[delta_col],
+                test_true=test_delta[delta_col],
+                test_pred=test_pred[delta_col],
+                title=f"{delta_col} (iter={n_estimators})",
+                output_path=step_compare_dir / f"{delta_col}_train_test_compare_{n_estimators}.png",
+            )
+
+        train_pred_path = step_analysis_dir / f"train_delta_y_predictions_{n_estimators}.csv"
+        test_pred_path = step_analysis_dir / f"test_delta_y_predictions_{n_estimators}.csv"
+        train_metric_path = step_analysis_dir / f"train_delta_y_metrics_{n_estimators}.csv"
+        test_metric_path = step_analysis_dir / f"test_delta_y_metrics_{n_estimators}.csv"
+
+        train_pred_df.to_csv(train_pred_path, index=False, encoding="utf-8-sig")
+        test_pred_df.to_csv(test_pred_path, index=False, encoding="utf-8-sig")
+        pd.DataFrame(train_metric_rows).to_csv(train_metric_path, index=False, encoding="utf-8-sig")
+        pd.DataFrame(test_metric_rows).to_csv(test_metric_path, index=False, encoding="utf-8-sig")
+
+        print(f"[{n_estimators}] 训练集预测结果: {train_pred_path}")
+        print(f"[{n_estimators}] 测试集预测结果: {test_pred_path}")
+        print(f"[{n_estimators}] 训练集指标: {train_metric_path}")
+        print(f"[{n_estimators}] 测试集指标: {test_metric_path}")
+        print(f"[{n_estimators}] 对比图目录: {step_compare_dir}")
+
+    r2_history_df = pd.DataFrame(test_r2_history).sort_values(["target", "n_estimators"])
+    r2_history_csv = ANALYSIS_DIR / "test_r2_vs_iteration.csv"
+    r2_history_plot = ANALYSIS_DIR / "test_r2_vs_iteration.png"
+    r2_history_df.to_csv(r2_history_csv, index=False, encoding="utf-8-sig")
+    plot_test_r2_curve(r2_history_df, r2_history_plot)
+
+    print(f"测试集R²汇总: {r2_history_csv}")
+    print(f"测试集R²折线图: {r2_history_plot}")
 
 
 if __name__ == "__main__":
