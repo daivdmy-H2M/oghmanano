@@ -1,21 +1,32 @@
 from pathlib import Path
+from typing import Optional
 import pickle
-try:
-    import joblib
-except ModuleNotFoundError:
-    joblib = None
+import subprocess
+import sys
+
+AUTO_INSTALL_MISSING_DEPS = True
 
 
-def require_package(importer, package_name: str, install_name: str | None = None):
+def require_package(importer, package_name: str, install_name: Optional[str] = None, optional: bool = False):
+    install_target = install_name or package_name
     try:
         return importer()
     except ModuleNotFoundError:
-        install_target = install_name or package_name
+        if optional:
+            return None
+
+        if AUTO_INSTALL_MISSING_DEPS:
+            print(f"缺少依赖包: {package_name}，正在自动安装 {install_target} ...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", install_target])
+            return importer()
+
         raise SystemExit(
             f"缺少依赖包: {package_name}。请先安装后再运行，例如: "
             f"python -m pip install {install_target}"
         )
 
+
+joblib = require_package(lambda: __import__("joblib"), "joblib", optional=True)
 
 plt = require_package(lambda: __import__("matplotlib.pyplot", fromlist=["pyplot"]), "matplotlib")
 pd = require_package(lambda: __import__("pandas"), "pandas")
