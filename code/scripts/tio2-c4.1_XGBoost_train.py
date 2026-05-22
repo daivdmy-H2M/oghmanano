@@ -118,17 +118,28 @@ class SimpleMultiOutputXGBRegressor:
     def fit(self, x_df: pd.DataFrame, y_df: pd.DataFrame):
         x_enc = self._prepare_features(x_df, fit=True)
         self.models = {}
-        x_np = x_enc.to_numpy(dtype=float)
+
+        x_np = x_enc.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        x_np = np.nan_to_num(x_np, nan=0.0, posinf=0.0, neginf=0.0)
         x_aug = np.column_stack([np.ones(len(x_np)), x_np])
+
+        # 岭回归闭式解，避免lstsq在病态矩阵上SVD不收敛
+        reg_lambda = 1e-6
+        xtx = x_aug.T @ x_aug
+        ident = np.eye(xtx.shape[0], dtype=float)
+        ident[0, 0] = 0.0  # 不正则化截距项
+
         for col in y_df.columns:
-            y_np = np.asarray(y_df[col], dtype=float)
-            coef, *_ = np.linalg.lstsq(x_aug, y_np, rcond=None)
+            y_np = pd.to_numeric(y_df[col], errors="coerce").to_numpy(dtype=float)
+            y_np = np.nan_to_num(y_np, nan=0.0, posinf=0.0, neginf=0.0)
+            coef = np.linalg.solve(xtx + reg_lambda * ident, x_aug.T @ y_np)
             self.models[col] = coef
         return self
 
     def predict(self, x_df: pd.DataFrame):
         x_enc = self._prepare_features(x_df, fit=False)
-        x_np = x_enc.to_numpy(dtype=float)
+        x_np = x_enc.apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        x_np = np.nan_to_num(x_np, nan=0.0, posinf=0.0, neginf=0.0)
         x_aug = np.column_stack([np.ones(len(x_np)), x_np])
         preds = [x_aug @ self.models[col] for col in self.models]
         return np.column_stack(preds)
