@@ -1,19 +1,59 @@
 from pathlib import Path
-
+import pickle
 try:
     import joblib
 except ModuleNotFoundError:
     joblib = None
-    import pickle
-import matplotlib.pyplot as plt
-import pandas as pd
-from sklearn.compose import ColumnTransformer
-from sklearn.impute import SimpleImputer
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.multioutput import MultiOutputRegressor
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from xgboost import XGBRegressor
+
+
+def require_package(importer, package_name: str, install_name: str | None = None):
+    try:
+        return importer()
+    except ModuleNotFoundError:
+        install_target = install_name or package_name
+        raise SystemExit(
+            f"缺少依赖包: {package_name}。请先安装后再运行，例如: "
+            f"python -m pip install {install_target}"
+        )
+
+
+plt = require_package(lambda: __import__("matplotlib.pyplot", fromlist=["pyplot"]), "matplotlib")
+pd = require_package(lambda: __import__("pandas"), "pandas")
+ColumnTransformer = require_package(
+    lambda: __import__("sklearn.compose", fromlist=["ColumnTransformer"]).ColumnTransformer,
+    "scikit-learn",
+    "scikit-learn",
+)
+SimpleImputer = require_package(
+    lambda: __import__("sklearn.impute", fromlist=["SimpleImputer"]).SimpleImputer,
+    "scikit-learn",
+    "scikit-learn",
+)
+_metrics = require_package(lambda: __import__("sklearn.metrics", fromlist=["*"]), "scikit-learn", "scikit-learn")
+mean_absolute_error = _metrics.mean_absolute_error
+mean_squared_error = _metrics.mean_squared_error
+r2_score = _metrics.r2_score
+MultiOutputRegressor = require_package(
+    lambda: __import__("sklearn.multioutput", fromlist=["MultiOutputRegressor"]).MultiOutputRegressor,
+    "scikit-learn",
+    "scikit-learn",
+)
+Pipeline = require_package(
+    lambda: __import__("sklearn.pipeline", fromlist=["Pipeline"]).Pipeline,
+    "scikit-learn",
+    "scikit-learn",
+)
+_preprocessing = require_package(
+    lambda: __import__("sklearn.preprocessing", fromlist=["OneHotEncoder", "StandardScaler"]),
+    "scikit-learn",
+    "scikit-learn",
+)
+OneHotEncoder = _preprocessing.OneHotEncoder
+StandardScaler = _preprocessing.StandardScaler
+XGBRegressor = require_package(
+    lambda: __import__("xgboost", fromlist=["XGBRegressor"]).XGBRegressor,
+    "xgboost",
+)
 
 SCRIPT_PATH = Path(__file__).resolve()
 PROJECT_ROOT = SCRIPT_PATH.parent.parent
