@@ -14,7 +14,7 @@ from xgboost import XGBRegressor
 SCRIPT_PATH = Path(__file__).resolve()
 PROJECT_ROOT = SCRIPT_PATH.parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
-OUTPUT_BASE_DIR = PROJECT_ROOT / "bin" / "tio2_c_4.3"
+OUTPUT_BASE_DIR = PROJECT_ROOT / "bin" / "tio2_c_4.5"
 EXCLUDED_REF_IDS = {21388, 21389}
 
 TRAIN_DIR = DATA_DIR / "train"
@@ -74,7 +74,9 @@ def load_split_dataset(split_dir: Path, split_name: str):
 
 
 
-def filter_excluded_ref_ids(df_x: pd.DataFrame, df_y: pd.DataFrame, df_y_hat: pd.DataFrame, split_name: str):
+def filter_excluded_ref_ids(
+    df_x: pd.DataFrame, df_y: pd.DataFrame, df_y_hat: pd.DataFrame, split_name: str
+):
     mask = ~df_x["Ref_ID"].isin(EXCLUDED_REF_IDS)
     removed_count = int((~mask).sum())
     if removed_count:
@@ -85,6 +87,91 @@ def filter_excluded_ref_ids(df_x: pd.DataFrame, df_y: pd.DataFrame, df_y_hat: pd
         df_y.loc[mask].reset_index(drop=True),
         df_y_hat.loc[mask].reset_index(drop=True),
     )
+
+
+def normalize_with_global_abs_max(*series_list: pd.Series):
+    combined = pd.concat(series_list, axis=0).dropna()
+    if combined.empty:
+        return [s.copy() for s in series_list], 1.0
+
+    global_abs_max = combined.abs().max()
+    if pd.isna(global_abs_max) or global_abs_max == 0:
+        global_abs_max = 1.0
+
+    normalized = [s / global_abs_max for s in series_list]
+    return normalized, float(global_abs_max)
+
+
+def plot_compare_global_abs_normalized(
+    train_true, train_pred, test_true, test_pred, title, output_path: Path
+):
+    normalized_series, global_base = normalize_with_global_abs_max(
+        train_true, train_pred, test_true, test_pred
+    )
+    train_true_n, train_pred_n, test_true_n, test_pred_n = normalized_series
+
+    train_df = pd.DataFrame({"true": train_true_n, "pred": train_pred_n}).dropna()
+    test_df = pd.DataFrame({"true": test_true_n, "pred": test_pred_n}).dropna()
+    merged_df = pd.concat([train_df, test_df], axis=0)
+    if merged_df.empty:
+        return
+
+    min_val = min(merged_df["true"].min(), merged_df["pred"].min())
+    max_val = max(merged_df["true"].max(), merged_df["pred"].max())
+    padding = (max_val - min_val) * 0.05 if max_val > min_val else 0.1
+    lower = min_val - padding
+    upper = max_val + padding
+
+    train_r2 = r2_score(train_df["true"], train_df["pred"]) if len(train_df) > 1 else float("nan")
+    test_r2 = r2_score(test_df["true"], test_df["pred"]) if len(test_df) > 1 else float("nan")
+
+    plt.figure(figsize=(6, 6), dpi=140)
+    ax = plt.gca()
+    ax.scatter(
+        train_df["true"],
+        train_df["pred"],
+        s=30,
+        marker="o",
+        facecolors="none",
+        edgecolors="#1f5aa6",
+        linewidths=1.1,
+        label="train",
+    )
+    ax.scatter(
+        test_df["true"],
+        test_df["pred"],
+        s=30,
+        marker="s",
+        facecolors="none",
+        edgecolors="#d62728",
+        linewidths=1.1,
+        label="test",
+    )
+    ax.plot([lower, upper], [lower, upper], linestyle="--", color="black", linewidth=1.2)
+    ax.set_xlim(lower, upper)
+    ax.set_ylim(lower, upper)
+    ax.set_xlabel("Actual Values (Global-Abs-Max Normalized)")
+    ax.set_ylabel("Predicted Values (Global-Abs-Max Normalized)")
+    ax.set_title(f"{title} - XGBoost - Global Abs Max Normalized")
+    ax.legend(loc="upper left")
+    ax.grid(alpha=0.2)
+
+    ax.text(
+        0.03,
+        0.97,
+        f"R²(train)={train_r2:.4f}\nR²(test)={test_r2:.4f}\nbase={global_base:.4g}",
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        fontsize=9,
+        bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "gray"},
+    )
+
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches="tight")
+    plt.close()
+
+
 def build_delta_targets(df_y: pd.DataFrame, df_y_hat: pd.DataFrame) -> pd.DataFrame:
     delta_df = pd.DataFrame(index=df_y.index)
     for sim_col, real_col, target_name in TARGET_MAP:
@@ -339,6 +426,16 @@ def main():
                 test_pred=test_pred[delta_col],
                 title=f"{delta_col} (iter={n_estimators})",
                 output_path=step_compare_dir / f"{delta_col}_train_test_compare_{n_estimators}.png",
+            )
+
+            plot_compare_global_abs_normalized(
+                train_true=train_delta[delta_col],
+                train_pred=train_pred[delta_col],
+                test_true=test_delta[delta_col],
+                test_pred=test_pred[delta_col],
+                title=f"{delta_col} (iter={n_estimators})",
+                output_path=step_compare_dir
+                / f"{delta_col}_train_test_compare_global_abs_norm_{n_estimators}.png",
             )
 
         train_pred_path = step_analysis_dir / f"train_delta_y_predictions_{n_estimators}.csv"
