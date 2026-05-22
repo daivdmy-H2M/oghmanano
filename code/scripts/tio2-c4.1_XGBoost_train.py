@@ -1,7 +1,10 @@
 from pathlib import Path
 
 import pickle
+
+import numpy as np
 import pandas as pd
+from xgboost import XGBRegressor
 
 SCRIPT_PATH = Path(__file__).resolve()
 PROJECT_ROOT = SCRIPT_PATH.parent.parent
@@ -97,80 +100,71 @@ def build_iqr_mask(delta_df: pd.DataFrame, k: float = 3.0) -> pd.Series:
     return mask
 
 def build_model(x_sample: pd.DataFrame, n_estimators: int):
-    from sklearn.compose import ColumnTransformer
-    from sklearn.impute import SimpleImputer
-    from sklearn.multioutput import MultiOutputRegressor
-    from sklearn.pipeline import Pipeline
-    from sklearn.preprocessing import OneHotEncoder, StandardScaler
-    from xgboost import XGBRegressor
+    return SimpleMultiOutputXGBRegressor(n_estimators=n_estimators)
 
-    categorical_cols = x_sample.select_dtypes(
-        include=["object", "category", "string"]
-    ).columns
-    numeric_cols = x_sample.select_dtypes(include=["number"]).columns
 
-    preprocessor = ColumnTransformer(
-        transformers=[
-            (
-                "num",
-                Pipeline(
-                    steps=[
-                        ("imputer", SimpleImputer(strategy="median")),
-                        ("scaler", StandardScaler()),
-                    ]
-                ),
-                list(numeric_cols),
-            ),
-            (
-                "cat",
-                Pipeline(
-                    steps=[
-                        ("imputer", SimpleImputer(strategy="most_frequent")),
-                        ("encoder", OneHotEncoder(handle_unknown="ignore")),
-                    ]
-                ),
-                list(categorical_cols),
-            ),
-        ]
-    )
+class SimpleMultiOutputXGBRegressor:
+    def __init__(self, n_estimators: int):
+        self.n_estimators = n_estimators
+        self.models = {}
+        self.feature_columns = None
 
-    base_regressor = XGBRegressor(
-        n_estimators=n_estimators,
-        learning_rate=0.03,
-        max_depth=6,
-        min_child_weight=3,
-        subsample=0.9,
-        colsample_bytree=0.9,
-        reg_alpha=0.0,
-        reg_lambda=1.0,
-        objective="reg:squarederror",
-        random_state=42,
-        n_jobs=-1,
-    )
+    def _prepare_features(self, x_df: pd.DataFrame, fit: bool = False) -> pd.DataFrame:
+        encoded = pd.get_dummies(x_df, dummy_na=True)
+        if fit:
+            self.feature_columns = encoded.columns
+            return encoded
+        return encoded.reindex(columns=self.feature_columns, fill_value=0)
 
-    return Pipeline(
-        steps=[
-            ("preprocessor", preprocessor),
-            ("regressor", MultiOutputRegressor(base_regressor)),
-        ]
-    )
+    def fit(self, x_df: pd.DataFrame, y_df: pd.DataFrame):
+        x_enc = self._prepare_features(x_df, fit=True)
+        self.models = {}
+        for col in y_df.columns:
+            reg = XGBRegressor(
+                n_estimators=self.n_estimators,
+                learning_rate=0.03,
+                max_depth=6,
+                min_child_weight=3,
+                subsample=0.9,
+                colsample_bytree=0.9,
+                reg_alpha=0.0,
+                reg_lambda=1.0,
+                objective="reg:squarederror",
+                random_state=42,
+                n_jobs=-1,
+            )
+            reg.fit(x_enc, y_df[col])
+            self.models[col] = reg
+        return self
+
+    def predict(self, x_df: pd.DataFrame):
+        x_enc = self._prepare_features(x_df, fit=False)
+        preds = [self.models[col].predict(x_enc) for col in self.models]
+        return np.column_stack(preds)
 
 
 def calc_metrics(y_true: pd.Series, y_pred: pd.Series) -> dict:
-    from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+    y_true_np = np.asarray(y_true, dtype=float)
+    y_pred_np = np.asarray(y_pred, dtype=float)
+    diff = y_pred_np - y_true_np
+
+    mae = float(np.mean(np.abs(diff)))
+    rmse = float(np.sqrt(np.mean(diff**2)))
+
+    ss_res = float(np.sum((y_true_np - y_pred_np) ** 2))
+    ss_tot = float(np.sum((y_true_np - np.mean(y_true_np)) ** 2))
+    r2 = float(1 - ss_res / ss_tot) if ss_tot != 0 else float("nan")
 
     return {
         "sample_count": len(y_true),
-        "MAE": mean_absolute_error(y_true, y_pred),
-        "RMSE": mean_squared_error(y_true, y_pred) ** 0.5,
-        "R2": r2_score(y_true, y_pred),
+        "MAE": mae,
+        "RMSE": rmse,
+        "R2": r2,
     }
 
 
 def plot_compare(train_true, train_pred, test_true, test_pred, title, output_path: Path):
     import matplotlib.pyplot as plt
-    from sklearn.metrics import r2_score
-
     train_df = pd.DataFrame({"true": train_true, "pred": train_pred}).dropna()
     test_df = pd.DataFrame({"true": test_true, "pred": test_pred}).dropna()
     merged_df = pd.concat([train_df, test_df], axis=0)
@@ -183,8 +177,8 @@ def plot_compare(train_true, train_pred, test_true, test_pred, title, output_pat
     lower = min_val - padding
     upper = max_val + padding
 
-    train_r2 = r2_score(train_df["true"], train_df["pred"]) if len(train_df) > 1 else float("nan")
-    test_r2 = r2_score(test_df["true"], test_df["pred"]) if len(test_df) > 1 else float("nan")
+    train_r2 = calc_metrics(train_df["true"], train_df["pred"])["R2"] if len(train_df) > 1 else float("nan")
+    test_r2 = calc_metrics(test_df["true"], test_df["pred"])["R2"] if len(test_df) > 1 else float("nan")
 
     plt.figure(figsize=(6, 6), dpi=140)
     ax = plt.gca()
