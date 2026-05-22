@@ -28,7 +28,7 @@ ETL_THICKNESS_NM = 200.0
 HTL_THICKNESS_NM = 200.0
 BACKCONTACT_THICKNESS_NM = 100.0
 
-PEROVSKITE_THICKNESS_LIST = list(range(100, 701, 100))
+PEROVSKITE_THICKNESS_LIST = list(range(200, 801, 100))
 
 MODEL_DIR = PROJECT_ROOT / "code" / "bin" / "tio2_c_4.5" / "model_step"
 MODEL_MAP = {
@@ -179,8 +179,8 @@ def main():
     sim_df = pd.DataFrame(sim_rows)
     model_df = pd.DataFrame(model_rows)
 
-    sim_path = OUTPUT_DIR / "simulate_Perovskite_100_700.csv"
-    model_path = OUTPUT_DIR / "module_simulate_Perovskite_100_700.csv"
+    sim_path = OUTPUT_DIR / "simulate_Perovskite_200_800.csv"
+    model_path = OUTPUT_DIR / "module_simulate_Perovskite_200_800.csv"
 
     sim_df.to_csv(sim_path, index=False, encoding="utf-8-sig")
     model_df.to_csv(model_path, index=False, encoding="utf-8-sig")
