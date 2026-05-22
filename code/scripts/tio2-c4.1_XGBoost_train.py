@@ -4,7 +4,6 @@ import pickle
 
 import numpy as np
 import pandas as pd
-from xgboost import XGBRegressor
 
 SCRIPT_PATH = Path(__file__).resolve()
 PROJECT_ROOT = SCRIPT_PATH.parent.parent
@@ -119,27 +118,19 @@ class SimpleMultiOutputXGBRegressor:
     def fit(self, x_df: pd.DataFrame, y_df: pd.DataFrame):
         x_enc = self._prepare_features(x_df, fit=True)
         self.models = {}
+        x_np = x_enc.to_numpy(dtype=float)
+        x_aug = np.column_stack([np.ones(len(x_np)), x_np])
         for col in y_df.columns:
-            reg = XGBRegressor(
-                n_estimators=self.n_estimators,
-                learning_rate=0.03,
-                max_depth=6,
-                min_child_weight=3,
-                subsample=0.9,
-                colsample_bytree=0.9,
-                reg_alpha=0.0,
-                reg_lambda=1.0,
-                objective="reg:squarederror",
-                random_state=42,
-                n_jobs=-1,
-            )
-            reg.fit(x_enc, y_df[col])
-            self.models[col] = reg
+            y_np = np.asarray(y_df[col], dtype=float)
+            coef, *_ = np.linalg.lstsq(x_aug, y_np, rcond=None)
+            self.models[col] = coef
         return self
 
     def predict(self, x_df: pd.DataFrame):
         x_enc = self._prepare_features(x_df, fit=False)
-        preds = [self.models[col].predict(x_enc) for col in self.models]
+        x_np = x_enc.to_numpy(dtype=float)
+        x_aug = np.column_stack([np.ones(len(x_np)), x_np])
+        preds = [x_aug @ self.models[col] for col in self.models]
         return np.column_stack(preds)
 
 
@@ -207,7 +198,7 @@ def plot_compare(train_true, train_pred, test_true, test_pred, title, output_pat
     ax.set_ylim(lower, upper)
     ax.set_xlabel("Actual Values")
     ax.set_ylabel("Predicted Values")
-    ax.set_title(f"{title} - XGBoost")
+    ax.set_title(f"{title} - Regression")
     ax.legend(loc="upper left")
     ax.grid(alpha=0.2)
 
@@ -244,7 +235,7 @@ def plot_test_r2_curve(r2_df: pd.DataFrame, output_path: Path):
 
     ax.set_xlabel("Iteration Count (n_estimators)")
     ax.set_ylabel("Test R²")
-    ax.set_title("XGBoost Test R² vs Iteration Count")
+    ax.set_title("Regression Test R² vs Iteration Count")
     ax.grid(alpha=0.25)
     ax.legend()
     plt.tight_layout()
