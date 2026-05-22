@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import importlib.util
 import pickle
 import pandas as pd
 
@@ -261,10 +260,6 @@ def plot_test_r2_curve(r2_df: pd.DataFrame, output_path: Path):
 
 
 
-def has_training_dependencies() -> bool:
-    required_modules = ["sklearn", "xgboost", "matplotlib"]
-    return all(importlib.util.find_spec(name) is not None for name in required_modules)
-
 def main():
     print("迭代区间: 100 到 800，步长 50")
     print(f"读取训练数据: {TRAIN_DIR}")
@@ -304,21 +299,8 @@ def main():
     print(f"IQR(k=3.0) 过滤后训练样本: {len(train_delta)} / {len(train_x_df)}")
     print(f"IQR(k=3.0) 过滤后测试样本: {len(test_delta)} / {len(test_x_df)}")
 
-    ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
-
-    filtered_train_path = ANALYSIS_DIR / "train_filtered_delta_dataset.csv"
-    filtered_test_path = ANALYSIS_DIR / "test_filtered_delta_dataset.csv"
-    pd.concat([train_ref_id.rename("Ref_ID"), train_delta], axis=1).to_csv(filtered_train_path, index=False, encoding="utf-8-sig")
-    pd.concat([test_ref_id.rename("Ref_ID"), test_delta], axis=1).to_csv(filtered_test_path, index=False, encoding="utf-8-sig")
-    print(f"IQR过滤后训练数据已保存: {filtered_train_path}")
-    print(f"IQR过滤后测试数据已保存: {filtered_test_path}")
-
-    if not has_training_dependencies():
-        print("检测到当前环境缺少训练依赖（sklearn/xgboost/matplotlib），已跳过模型训练与绘图。")
-        print("如需完整训练，请先安装依赖: pip install scikit-learn xgboost matplotlib")
-        return
-
     MODEL_STEP_DIR.mkdir(parents=True, exist_ok=True)
+    ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
 
     iteration_values = list(range(ITERATION_START, ITERATION_END + 1, ITERATION_STEP))
     test_r2_history = []
