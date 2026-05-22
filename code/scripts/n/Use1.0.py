@@ -11,7 +11,11 @@ import pandas as pd
 SCRIPT_PATH = Path(__file__).resolve()
 PROJECT_ROOT = SCRIPT_PATH.parents[3]
 
-BASE_SIM_JSON = PROJECT_ROOT / "configs" / "sim.json"
+BASE_SIM_JSON_CANDIDATES = [
+    PROJECT_ROOT / "code" / "configs" / "sim.json",
+    PROJECT_ROOT / "configs" / "sim.json",
+]
+BASE_SIM_JSON = next((p for p in BASE_SIM_JSON_CANDIDATES if p.exists()), BASE_SIM_JSON_CANDIDATES[0])
 OUTPUT_DIR = PROJECT_ROOT / "code" / "bin" / "use_tio2_c_4.5_1.0"
 RUN_OUTPUT_DIR = OUTPUT_DIR / "runs"
 
@@ -133,7 +137,8 @@ def predict_with_model(model, x_row: dict, sim_value: float):
 
 def main():
     if not BASE_SIM_JSON.exists():
-        raise FileNotFoundError(f"未找到基础配置文件: {BASE_SIM_JSON}")
+        candidate_text = "\n".join([f"- {p}" for p in BASE_SIM_JSON_CANDIDATES])
+        raise FileNotFoundError(f"未找到基础配置文件，已尝试以下路径：\n{candidate_text}")
     for metric, model_path in MODEL_MAP.items():
         if not model_path.exists():
             raise FileNotFoundError(f"未找到 {metric} 模型: {model_path}")
