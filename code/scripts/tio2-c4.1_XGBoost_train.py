@@ -1,6 +1,6 @@
 from pathlib import Path
 
-import joblib
+import pickle
 import matplotlib.pyplot as plt
 import pandas as pd
 from sklearn.compose import ColumnTransformer
@@ -306,7 +306,8 @@ def main():
 
         model = build_model(train_features, n_estimators=n_estimators)
         model.fit(train_features, train_delta)
-        joblib.dump(model, step_model_path)
+        with step_model_path.open("wb") as f:
+            pickle.dump(model, f)
         print(f"[{n_estimators}] 模型已保存: {step_model_path}")
 
         train_pred = pd.DataFrame(model.predict(train_features), columns=train_delta.columns)
