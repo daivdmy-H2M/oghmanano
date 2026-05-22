@@ -14,7 +14,8 @@ from xgboost import XGBRegressor
 SCRIPT_PATH = Path(__file__).resolve()
 PROJECT_ROOT = SCRIPT_PATH.parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
-OUTPUT_BASE_DIR = PROJECT_ROOT / "bin" / "tio2_c_4.0"
+OUTPUT_BASE_DIR = PROJECT_ROOT / "bin" / "tio2_c_4.3"
+EXCLUDED_REF_IDS = {21388, 21389}
 
 TRAIN_DIR = DATA_DIR / "train"
 TEST_DIR = DATA_DIR / "test"
@@ -71,6 +72,19 @@ def load_split_dataset(split_dir: Path, split_name: str):
     return data_x, data_y, data_y_hat
 
 
+
+
+def filter_excluded_ref_ids(df_x: pd.DataFrame, df_y: pd.DataFrame, df_y_hat: pd.DataFrame, split_name: str):
+    mask = ~df_x["Ref_ID"].isin(EXCLUDED_REF_IDS)
+    removed_count = int((~mask).sum())
+    if removed_count:
+        print(f"{split_name} 剔除 Ref_ID {sorted(EXCLUDED_REF_IDS)}，共 {removed_count} 条记录")
+
+    return (
+        df_x.loc[mask].reset_index(drop=True),
+        df_y.loc[mask].reset_index(drop=True),
+        df_y_hat.loc[mask].reset_index(drop=True),
+    )
 def build_delta_targets(df_y: pd.DataFrame, df_y_hat: pd.DataFrame) -> pd.DataFrame:
     delta_df = pd.DataFrame(index=df_y.index)
     for sim_col, real_col, target_name in TARGET_MAP:
@@ -241,6 +255,13 @@ def main():
 
     train_x_df, train_y_df, train_y_hat_df = load_split_dataset(TRAIN_DIR, "train")
     test_x_df, test_y_df, test_y_hat_df = load_split_dataset(TEST_DIR, "test")
+
+    train_x_df, train_y_df, train_y_hat_df = filter_excluded_ref_ids(
+        train_x_df, train_y_df, train_y_hat_df, "train"
+    )
+    test_x_df, test_y_df, test_y_hat_df = filter_excluded_ref_ids(
+        test_x_df, test_y_df, test_y_hat_df, "test"
+    )
 
     train_delta = build_delta_targets(train_y_df, train_y_hat_df)
     test_delta = build_delta_targets(test_y_df, test_y_hat_df)
